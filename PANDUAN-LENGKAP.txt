@@ -170,6 +170,18 @@ BAGIAN 6 - TROUBLESHOOTING
 [Q] Setup bilang "QEMU gagal terpasang" atau path ada spasi.
     -> Pindahkan kit ke C:\AndroidPortable, jalankan ulang setup.
 
+[Q] Launcher bilang "QEMU gagal nyala" waktu klik JALANKAN ANDROID.
+    -> Buka file log-nya di: data\logs\qemu-<nama-profile>.log
+       (alasan asli dari QEMU ada di situ, versi 1.1.8+ juga nampilin
+       alasan itu langsung di popup error).
+    -> Penyebab paling umum: WHPX/virtualisasi belum aktif. Dari v1.1.8
+       launcher OTOMATIS pindah ke mode TCG (jalan di PC apapun, cuma
+       lebih lambat). Kalau versi kamu masih lama: buka
+       config\config.json, ubah "accel": "auto" jadi "accel": "tcg".
+    -> Biar kenceng lagi: aktifkan "Windows Hypervisor Platform"
+       (Windows Features) + Virtualization Enabled di BIOS, lalu
+       balikin "accel" ke "auto".
+
 [Q] Download ISO selalu gagal/gagal di tengah.
     -> Jalankan ulang setup (download bisa lanjut/resume).
     -> Atau download manual dari link di config\links.ini, taruh di

@@ -30,7 +30,7 @@ if IS_WINDOWS:
     import ctypes  # noqa: F401 (dipakai untuk deteksi RAM)
 
 APP_NAME = "Android Portable Kit"
-APP_VERSION = "1.1.7"
+APP_VERSION = "1.1.8"
 
 # Repo GitHub tempat cek update otomatis (owner/repo)
 UPDATE_REPO = "zacrie85/AndroidPortableKit"
@@ -371,9 +371,16 @@ class AndroidEngine:
         return port
 
     # ---------------- jalanin / matiin Android ----------------
-    def _build_qemu_cmd(self, overlay: Path, port: int, ram_mb: int, tag: str) -> list:
+    def _build_qemu_cmd(self, overlay: Path, port: int, ram_mb: int, tag: str,
+                        accel_mode: str | None = None,
+                        with_audio: bool = True) -> list:
         p = self.p
         accel, cpu_model = self.detect_accel()
+        if accel_mode:
+            accel = accel_mode
+        # '-cpu host' cuma valid di whpx/kvm; di tcg harus dipakai 'max'
+        if accel != "whpx" and cpu_model == "host":
+            cpu_model = "max"
         cmd = [str(p.qemu_exe()), "-name", f"AndroidPortable-{tag}"]
         if accel == "whpx":
             cmd += ["-accel", "whpx"]
@@ -390,10 +397,43 @@ class AndroidEngine:
             "-netdev", f"user,id=n0,hostfwd=tcp:127.0.0.1:{port}-:5555",
             "-device", "e1000,netdev=n0",
             "-rtc", "base=localtime",
-            "-audiodev", "wasapi,id=snd0",
-            "-device", "intel-hda", "-device", "hda-duplex,audiodev=snd0",
         ]
+        if with_audio:
+            cmd += ["-audiodev", "wasapi,id=snd0",
+                    "-device", "intel-hda",
+                    "-device", "hda-duplex,audiodev=snd0"]
         return cmd
+
+    # ---------------- log QEMU ke file ----------------
+    def _qemu_log_path(self, profile: str) -> Path:
+        d = self.p.app_dir / "data" / "logs"
+        try:
+            d.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            pass
+        return d / f"qemu-{profile}.log"
+
+    @staticmethod
+    def _read_log_tail(path: Path, max_chars: int = 900) -> str:
+        try:
+            txt = path.read_bytes().decode("utf-8", errors="replace").strip()
+        except Exception:
+            return ""
+        return txt[-max_chars:] if len(txt) > max_chars else txt
+
+    @staticmethod
+    def _short_qemu_err(tail: str) -> str:
+        t = (tail or "").lower()
+        if "whpx" in t:
+            return "WHPX (virtualisasi Windows) gak aktif di PC ini"
+        if "gtk" in t and ("could not" in t or "failed" in t):
+            return "Display GTK gak tersedia"
+        if "sdl" in t and ("could not" in t or "failed" in t):
+            return "Display SDL gagal"
+        if "could not open" in t or "cannot open" in t:
+            return "Ada file (disk/BIOS) yang gak ketemu"
+        lines = [l.strip() for l in (tail or "").splitlines() if l.strip()]
+        return lines[-1][:120] if lines else "QEMU keluar tanpa pesan error"
 
     def start_instance(self, profile: str) -> Instance:
         """Nyalain Android. Raise RuntimeError kalau ada masalah."""
@@ -418,38 +458,69 @@ class AndroidEngine:
                 ram = min(ram, 2048)
             port = self._free_port()
 
-            cmd = self._build_qemu_cmd(overlay, port, ram, profile)
+            # daftar percobaan: (mode akselerasi, pakai audio)
+            # urutan: mode terpilih (whpx/tcg) dengan & tanpa audio,
+            # lalu kalau whpx gagal -> coba tcg juga (WHPX sering gak aktif
+            # di Windows walau QEMU-nya dukung)
+            first_accel, _ = self.detect_accel()
+            accels = [first_accel]
+            if first_accel == "whpx":
+                accels.append("tcg")
+            attempts = [(a, True) for a in accels] + [(a, False) for a in accels]
+
+            log_path = self._qemu_log_path(profile)
             flags = subprocess.CREATE_NO_WINDOW if IS_WINDOWS else 0
             self.log(f"Nyalain Android '{profile}' (RAM {ram} MB, port {port})...")
-            proc = subprocess.Popen(
-                cmd, cwd=str(p.app_dir), stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL, creationflags=flags)
-            time.sleep(3.0)
-            if proc.poll() is not None:
-                # coba versi tanpa audio (QEMU lama gak kenal audiodev wasapi)
-                cmd2 = [c for c in cmd]
-                for i, c in enumerate(cmd2):
-                    if c == "-audiodev":
-                        cmd2 = cmd2[:i] + cmd2[i + 2:]
-                        break
-                for i, c in enumerate(cmd2):
-                    if c == "intel-hda":
-                        cmd2 = cmd2[:i] + cmd2[i + 1:]
-                        break
-                for i, c in enumerate(cmd2):
-                    if c == "hda-duplex,audiodev=snd0":
-                        cmd2 = cmd2[:i] + cmd2[i + 1:]
-                        break
-                self.log("Coba lagi tanpa audio...")
-                proc = subprocess.Popen(
-                    cmd2, cwd=str(p.app_dir), stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL, creationflags=flags)
+
+            proc = None
+            used_accel = None
+            last_tail = ""
+            for i, (acc, with_audio) in enumerate(attempts):
+                cmd = self._build_qemu_cmd(
+                    overlay, port, ram, profile,
+                    accel_mode=acc, with_audio=with_audio)
+                try:
+                    lf = open(log_path, "wb", buffering=0)
+                    try:
+                        proc = subprocess.Popen(
+                            cmd, cwd=str(p.app_dir), stdin=subprocess.DEVNULL,
+                            stdout=lf, stderr=subprocess.STDOUT,
+                            creationflags=flags)
+                    finally:
+                        # QEMU udah dapat handle filenya sendiri,
+                        # nutup punya Python gak ngaruh
+                        lf.close()
+                except Exception as e:
+                    raise RuntimeError(f"Gagal membuka QEMU: {e}")
                 time.sleep(3.0)
-                if proc.poll() is not None:
-                    raise RuntimeError(
-                        "QEMU gagal nyala. Coba ubah 'vga' jadi 'virtio' atau "
-                        "'display' jadi 'gtk' di config/config.json. "
-                        "Pastikan juga driver QEMU terpasang.")
+                if proc.poll() is None:
+                    used_accel = acc
+                    break
+                last_tail = self._read_log_tail(log_path)
+                self.log(f"Percobaan {i + 1}/{len(attempts)} gagal: "
+                         f"{self._short_qemu_err(last_tail)}")
+                proc = None
+
+            if proc is None:
+                raise RuntimeError(
+                    "QEMU gagal nyala setelah semua percobaan.\n\n"
+                    "Alasan terakhir dari QEMU:\n"
+                    + (last_tail or "(gak ada output)")
+                    + "\n\nDetail lengkap ada di: " + str(log_path))
+
+            if first_accel == "whpx" and used_accel == "tcg":
+                self.log("WHPX (virtualisasi Windows) gak aktif di PC ini — "
+                         "otomatis pindah ke mode TCG (emulasi software, "
+                         "lebih lambat tapi pasti jalan).")
+                self.log("Biar jauh lebih kenceng: aktifkan 'Windows Hypervisor "
+                         "Platform' di Windows Features + Virtualization di BIOS, "
+                         "lalu ubah 'accel' di config/config.json jadi 'auto' lagi.")
+                try:
+                    self.cfg["accel"] = "tcg"
+                    save_config(self.p, self.cfg)
+                except Exception:
+                    pass
+
             inst = Instance(profile, proc, port, ram)
             self.instances[profile] = inst
             self.log(f"Android '{profile}' udah nyala. Menunggu sistem siap...")
