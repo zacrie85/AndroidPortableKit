@@ -195,6 +195,9 @@ def mode_run(a):
     disk = Path(a.disk)
     iso = Path(a.iso)
     append = (bootdir / "append.txt").read_text(encoding="utf-8").strip()
+    # AUTO_INSTALL=force: lewati dialog "last confirmation" (--defaultno) yang
+    # FATAL kalau kena Enter (default No = reboot). Lihat 1-install baris 140.
+    append = append.replace("AUTO_INSTALL=0", "AUTO_INSTALL=force")
     # FORCE_FORMAT=ext4: kernel meneruskan parameter tak-dikenal sebagai env var
     # -> installer auto-memilih ext4 tanpa dialog (set_answer_if_auto $FORCE_FORMAT)
     append = append + " FORCE_FORMAT=ext4"
@@ -261,23 +264,21 @@ def mode_run(a):
 
     deadline = t0 + a.timeout * 60
 
-    # Jadwal tombol berdasarkan REVERSE-ENGINEERING script installer BlissOS
-    # (scripts/1-install dari install.img + init dari initrd.img):
-    #   D1 ~t=40-60  : prompt console "...(y/n)?"  -> JAWABAN HARUS BUKAN 'y'
-    #                  (logikanya kebalik: y = Live Mode! n/kosong = install)
-    #   D2 ~t=75-110 : dialog "last confirmation" --defaultno --yesno
-    #                  -> 'left' (pindah ke Yes) lalu 'ret'. Enter doang = No = REBOOT!
-    #   D3 ~t=110-140: menu partisi (auto-answered via adialog) / inputbox nama drive
-    #                  -> 'ret' terima default
-    #   selanjutnya  : 'ret' berkala (inputbox/yesno aman)
-    #   t>=600       : 'down'+'ret' tiap 90 dtk -> menu akhir "Congratulations"
-    #                  pilih item 2 "Reboot" -> reboot -f -> QEMU keluar (-no-reboot)
-    #                  (di yesno: down tak berfungsi + ret = Yes; di inputbox: ret = default)
+    # Jadwal tombol berdasarkan REVERSE-ENGINEERING installer BlissOS
+    # (init dari initrd.img + scripts/1-install dari install.img):
+    #   t=40-60  : prompt console "...(y/n)?" muncul 2 KALI (init re-exec cttyhack)
+    #              -> jawaban APAPUN selain y/n-kosong tetap install; kirim 'n'+ret 2x
+    #   (AUTO_INSTALL=force membuat dialog "last confirmation" --defaultno DILEWATI)
+    #   t=110-140: inputbox nama drive -> 'ret' terima default "BlissOS"
+    #   t=600+   : 'down'+'ret' tiap 90 dtk -> data-yesno=Yes, size=2048 default,
+    #              menu akhir "Congratulations" pilih item 2 "Reboot" -> QEMU keluar
     events = [(50, "n"), (52, "ret"),
-              (95, "left"), (97, "ret"),
-              (110, "left"), (112, "ret"),
-              (130, "ret"), (160, "ret"), (190, "ret"),
-              (220, "ret"), (250, "ret"), (280, "ret"), (310, "ret")]
+              (75, "n"), (77, "ret"),
+              (95, "ret"), (115, "ret"), (135, "ret"), (155, "ret"),
+              (175, "ret"), (195, "ret"), (215, "ret"), (235, "ret"),
+              (255, "ret"), (280, "ret"), (310, "ret"), (340, "ret"),
+              (370, "ret"), (400, "ret"), (430, "ret"), (460, "ret"),
+              (490, "ret"), (520, "ret"), (560, "ret")]
     ei = 0
     next_periodic = t0 + 600          # fase akhir: down+ret tiap 90 dtk
     next_dump = t0 + 40
