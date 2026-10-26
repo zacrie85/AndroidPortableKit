@@ -182,6 +182,21 @@ BAGIAN 6 - TROUBLESHOOTING
        (Windows Features) + Virtualization Enabled di BIOS, lalu
        balikin "accel" ke "auto".
 
+[Q] Jendela Android kebuka tapi isinya hitam terus ada tulisan
+    "No bootable device" / "Boot failed: not a bootable disk".
+    -> Artinya: disk virtual-nya KOSONG - Android belum ke-install
+       di dalamnya. Bisa terjadi kalau dulu jendela install ditutup
+       sebelum muncul "Installation is complete".
+    -> Solusi manual: tutup launcher & jendela Android, hapus file
+       runtime\android\base-system.qcow2 dan folder2 di
+       data\profiles\ (isinya memang masih kosong, gak ada data
+       yang hilang), lalu jalankan 1-Setup-Awal.bat lagi dan KALI INI
+       tunggu sampai "Installation is complete" di jendela install
+       (pilih Auto Install > sda > ext4 > YES > Reboot).
+    -> Versi 1.1.9+: setup otomatis mendeteksi disk kosong dan
+       nawarin install ulang; launcher juga gak mau nyala kalau
+       disk masih kosong (pesannya jelas, gak bingung lagi).
+
 [Q] Download ISO selalu gagal/gagal di tengah.
     -> Jalankan ulang setup (download bisa lanjut/resume).
     -> Atau download manual dari link di config\links.ini, taruh di

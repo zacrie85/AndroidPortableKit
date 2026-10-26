@@ -233,9 +233,31 @@ if ($sizeGb -lt 0.6) {
 # LANGKAH 4: disk virtual + INSTALL Android ke disk
 # =============================================================
 Write-Head "LANGKAH 4/5 : Install Android ke disk virtual"
+$needInstall = $false
 if (Test-Path $BaseDisk) {
-    Write-Ok "Disk sistem Android udah ada"
+    # disk ada tapi < 800 MB = kosong / install dulu dibatalin
+    # (ini biang keroknya: biar kata file-nya ada, Android belum terpasang
+    #  -> launcher cuma nongol "No bootable device")
+    $szBase = (Get-Item $BaseDisk).Length
+    if ($szBase -ge 800MB) {
+        Write-Ok ("Disk sistem Android udah ada & terisi (" + [math]::Round($szBase/1GB,2) + " GB)")
+    } else {
+        Write-Warn2 ("Disk sistem-nya ADA tapi KOSONG (" + [math]::Round($szBase/1MB,1) + " MB).")
+        Write-Warn2 "Android belum ter-install di disk itu - kayaknya dulu jendela"
+        Write-Warn2 "install-nya ketutup sebelum selesai."
+        $ulang2 = Read-Host "Bikin ulang disk + install Android sekarang? (y/n) [y]"
+        if ($ulang2 -eq "n") {
+            Write-Err2 "Dibatalin. Android gak bakal bisa boot selama disk-nya kosong."
+            Read-Host "Tekan ENTER buat keluar"; exit 1
+        }
+        Remove-Item $BaseDisk -Force
+        $needInstall = $true
+    }
 } else {
+    $needInstall = $true
+}
+
+if ($needInstall) {
     Write-Info "Bikin disk virtual 40 GB (file-nya tipis, nggak makan tempat langsung)..."
     & $QemuImg create -f qcow2 $BaseDisk 40G
     if (-not (Test-Path $BaseDisk)) { Write-Err2 "Gagal bikin disk"; Read-Host "ENTER"; exit 1 }

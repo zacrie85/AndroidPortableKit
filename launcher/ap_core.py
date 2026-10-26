@@ -30,7 +30,7 @@ if IS_WINDOWS:
     import ctypes  # noqa: F401 (dipakai untuk deteksi RAM)
 
 APP_NAME = "Android Portable Kit"
-APP_VERSION = "1.1.8"
+APP_VERSION = "1.1.9"
 
 # Repo GitHub tempat cek update otomatis (owner/repo)
 UPDATE_REPO = "zacrie85/AndroidPortableKit"
@@ -248,11 +248,22 @@ class AndroidEngine:
             return 1, f"Error: {e}"
 
     # ---------------- cek kesiapan ----------------
+    # Disk yang benar2 terpasang BlissOS itu >= 1 GB.
+    # Disk kosong (qemu-img create doang) ukurannya cuma ~200 KB.
+    # Dipakai buat mendeteksi "disk ada tapi Android belum ter-install"
+    # biar gak muncul "No bootable device" di jendela Android.
+    BASE_DISK_MIN_BYTES = 800 * 1024 * 1024
+
     def check_setup(self) -> dict:
         p = self.p
         qemu_ok = p.qemu_exe().exists()
         adb_ok = p.adb_exe().exists()
-        base_ok = p.base_disk.exists()
+        base_ok = False
+        if p.base_disk.exists():
+            try:
+                base_ok = p.base_disk.stat().st_size >= self.BASE_DISK_MIN_BYTES
+            except OSError:
+                base_ok = False
         iso = p.find_iso()
         status = {
             "qemu_ok": qemu_ok,
@@ -443,6 +454,13 @@ class AndroidEngine:
             p = self.p
             st = self.check_setup()
             if not st["ready"]:
+                if st["qemu_ok"] and st["adb_ok"] and not st["base_ok"]:
+                    raise RuntimeError(
+                        "Disk sistem Android-nya kosong (Android belum "
+                        "ter-install di dalamnya).\nJalankan '1-Setup-Awal.bat' "
+                        "-> dia bakal mendeteksi disk kosong dan nawarin "
+                        "install ulang. Kalau ditanya, jawab y lalu ikuti "
+                        "langkah install sampai 'Installation is complete'.")
                 raise RuntimeError(
                     "Setup belum lengkap (butuh QEMU, ADB, dan sistem Android). "
                     "Jalankan '1-Setup-Awal.bat' dulu.")
