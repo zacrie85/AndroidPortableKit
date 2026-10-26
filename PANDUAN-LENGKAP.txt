@@ -52,7 +52,34 @@ BAGIAN 2 - SYARAT & PERSIAPAN
    "Add Python to PATH".
 
 ---------------------------------------------------------------
-BAGIAN 3 - SETUP PERTAMA (LANGKAH DEMI LANGKAH)
+BAGIAN 2.5 - MODE OFFLINE (DISARANKAN, TANPA INTERNET)
+---------------------------------------------------------------
+Kalau kamu download SEMUA file dari halaman Release (bukan cuma
+AndroidPortableKit.zip), kamu dapat kit offline penuh:
+  - AndroidPortableKit.zip        : program utama
+  - Runtime-QEMU-ADB.zip          : mesin virtual QEMU + ADB
+  - android-base.qcow2.part01..   : sistem Android YANG SUDAH TERPASANG
+    (atau BlissOS16-GApps.iso.part... : ISO mentah, mode fallback)
+
+LANGKAH:
+1. Extract AndroidPortableKit.zip (hasilnya folder kit).
+2. Pindahkan Runtime-QEMU-ADB.zip dan semua file .part ke dalam
+   folder kit itu.
+3. Jalankan 1-Siapkan-Offline.bat -> dia merakit semuanya:
+   extract QEMU+ADB ke runtime\, menggabungkan bagian disk jadi
+   base-system.qcow2, dan bikin profile pertama "Utama".
+   TANPA INTERNET SAMA SEKALI.
+4. Jalankan 2-Buka-Launcher.bat -> klik JALANKAN ANDROID.
+5. (Hanya mode ISO/fallback) jika 1-Siapkan-Offline.bat minta,
+   jalankan 1-Setup-Awal.bat sekali - dia skip semua download
+   dan tinggal 1 langkah install di jendela VM (Auto Install).
+
+KEUNGGULAN: gak butuh internet, gak ada langkah download 2.6 GB,
+dan kalau pakai disk pre-install, langkah install Android di VM
+pun gak perlu - bener-bener tinggal pakai.
+
+---------------------------------------------------------------
+BAGIAN 3 - SETUP PERTAMA MODE ONLINE (ALTERNATIF)
 ---------------------------------------------------------------
 1. Ekstrak kit ke path TANPA SPASI, contoh: C:\AndroidPortable
    (path ada spasi = beberapa langkah setup bisa gagal).

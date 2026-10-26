@@ -1,5 +1,5 @@
 =========================================================
-   MULAI DISINI - ANDROID PORTABLE KIT
+   MULAI DISINI - ANDROID PORTABLE KIT v1.1
    Nonton & upload video TikTok / Instagram / SnackVideo /
    YouTube langsung dari Windows, tanpa install apapun
 =========================================================
@@ -7,43 +7,58 @@
 KEBUTUHAN:
 - Windows 10 / 11 (64-bit)
 - RAM minimal 8 GB (disarankan)
-- Ruang disk kosong minimal 10 GB
-- Koneksi internet (cuma buat setup awal & download app di Play Store)
+- Ruang disk kosong minimal 12 GB
 
-LANGKAH SINGKAT:
----------------------------------------------------------
-[1] Ekstrak folder "AndroidPortableKit" ini ke path TANPA SPASI.
-    Contoh paling aman:  C:\AndroidPortable
+=========================================================
+CARA PALING GAMPANG - MODE OFFLINE (GAK BUTUH INTERNET)
+=========================================================
 
-[2] (Disarankan) Aktifkan biar kenceng:
-    Start Menu > ketik "Turn Windows features on or off"
-    > centang "Windows Hypervisor Platform" > Restart PC
+[1] Buka halaman Releases repo ini di GitHub.
+    Download SEMUA file yang ada di rilis terbaru:
+      - AndroidPortableKit.zip        (program utama)
+      - Runtime-QEMU-ADB.zip          (mesin virtual + ADB)
+      - android-base.qcow2.part01, part02, dst  (sistem Android)
+    Taruh SEMUA file di SATU folder yang sama.
 
-[3] Klik dua kali:  1-Setup-Awal.bat
-    - Ikuti proses download (QEMU ~197 MB + ADB + ISO Android ~2.4 GB)
-    - Nanti muncul jendela virtual, di situ pilih:
-        "Auto Install to specified harddisk" -> sda -> ext4 -> YES
-      Tunggu sampai "Installation is complete", lalu Reboot/tutup jendela.
+[2] Klik dua kali AndroidPortableKit.zip -> Extract All
+    (atau klik kanan -> Extract). Hasil extract jadi folder kit.
 
-[4] (Sekali aja) Klik dua kali:  launcher\BUILD-EXE.bat
-    -> bikin AndroidPortable.exe (butuh Python, link di PANDUAN-LENGKAP)
+[3] PINDAHKAN file-file ini ke DALAM folder hasil extract:
+      Runtime-QEMU-ADB.zip
+      android-base.qcow2.part01, part02, dst.
 
-[5] Klik dua kali:  2-Buka-Launcher.bat
-    -> Klik "JALANKAN ANDROID" -> tunggu layar Android muncul
+[4] Jalankan: 1-Siapkan-Offline.bat
+    -> merakit semuanya jadi satu. GAK BUTUH INTERNET.
+    (kalau yang kamu download adalah BlissOS16-GApps.iso.part...,
+     bat ini tetap merakit, lalu minta jalankan 1-Setup-Awal.bat
+     sekali buat install - tetap tanpa internet)
 
-[6] Di dalam Android:
-    - Login akun Google kamu
-    - Buka Play Store -> install TikTok, Instagram, SnackVideo, YouTube
+[5] Jalankan: 2-Buka-Launcher.bat
+    -> Klik "JALANKAN ANDROID"
 
-[7] BUAT UPLOAD VIDEO:
-    - Di launcher klik "KIRIM VIDEO DARI PC" -> pilih video kamu
+[6] Di dalam Android: login akun Google, buka Play Store,
+    install TikTok, Instagram, SnackVideo, YouTube.
+
+[7] UPLOAD VIDEO:
+    - Klik "KIRIM VIDEO DARI PC" -> pilih video kamu
     - Video muncul di galeri Android
-    - Buka TikTok/IG/SnackVideo/YT -> tombol upload (+) -> pilih video
+    - Buka TikTok/IG/SnackVideo/YT -> tombol (+) -> pilih video
       -> tulis caption/judul -> POST!
 
-[8] BUAT MULTI-AKUN (CLONE):
-    - Klik "+ Profile Baru" di launcher (misal: Akun-2)
-    - Jalankan barengan: profile Utama + Akun-2 jalan di 2 jendela
-    - Tiap profile = data & akun terpisah total
+[8] MULTI-AKUN (CLONE):
+    - Klik "+ Profile Baru" (misal: Akun-2)
+    - Jalankan barengan beberapa profile, tiap profile akun terpisah
 
-SELESAI! Detail lengkap + troubleshooting ada di PANDUAN-LENGKAP.txt
+=========================================================
+ALTERNATIF - MODE ONLINE (kalau gak mau download file gede)
+=========================================================
+[1] Extract AndroidPortableKit.zip ke path tanpa spasi, mis. C:\AndroidPortable
+[2] Jalankan 1-Setup-Awal.bat (download otomatis ~2.6 GB dari internet)
+[3] Ikuti petunjuk install di jendela yang muncul
+[4] Lanjut langkah 5-8 di atas.
+
+TIPS PENTING:
+- Ekstrak ke path TANPA SPASI (contoh: C:\AndroidPortable) biar mulus
+- Biar kenceng: aktifkan "Windows Hypervisor Platform" di Windows Features
+- Bebasin mouse dari jendela Android: Ctrl+Alt+G
+- Detail lengkap + troubleshooting: PANDUAN-LENGKAP.txt

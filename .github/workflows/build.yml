@@ -1,4 +1,4 @@
-name: Build AndroidPortable.exe
+name: Build & Package Android Portable Kit
 
 on:
   push:
@@ -10,6 +10,9 @@ permissions:
   contents: write
 
 jobs:
+  # ------------------------------------------------------------
+  # JOB 1: build launcher .exe + zip program
+  # ------------------------------------------------------------
   build:
     runs-on: windows-latest
     steps:
@@ -34,7 +37,7 @@ jobs:
           $ErrorActionPreference = "Stop"
           $stage = "stage/AndroidPortableKit"
           New-Item -ItemType Directory -Force -Path $stage | Out-Null
-          Copy-Item MULAI-DISINI.txt,PANDUAN-LENGKAP.txt,README.md,1-Setup-Awal.bat,2-Buka-Launcher.bat $stage/
+          Copy-Item MULAI-DISINI.txt,PANDUAN-LENGKAP.txt,README.md,1-Siapkan-Offline.bat,1-Setup-Awal.bat,2-Buka-Launcher.bat $stage/
           Copy-Item config -Destination $stage -Recurse -Force
           Copy-Item scripts -Destination $stage -Recurse -Force
           Copy-Item data -Destination $stage -Recurse -Force
@@ -55,3 +58,192 @@ jobs:
             AndroidPortable.exe
             AndroidPortableKit.zip
           generate_release_notes: true
+
+  # ------------------------------------------------------------
+  # JOB 2: bundel QEMU portable + ADB (offline runtime)
+  # ------------------------------------------------------------
+  runtime:
+    needs: build
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Pasang QEMU (silent, portable ke C:\qemu_portable)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          curl.exe -L --retry 5 -o "$env:RUNNER_TEMP\qemu-setup.exe" https://qemu.weilnetz.de/w64/qemu-w64-setup-20260811.exe
+          Start-Process "$env:RUNNER_TEMP\qemu-setup.exe" -ArgumentList "/S","/D=C:\qemu_portable" -Wait
+          if (-not (Test-Path "C:\qemu_portable\qemu-system-x86_64.exe")) { throw "QEMU gak terpasang" }
+          Write-Host "QEMU OK"
+
+      - name: Download ADB platform-tools
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          New-Item -ItemType Directory -Force -Path "C:\stage_rt" | Out-Null
+          curl.exe -L --retry 5 -o "$env:RUNNER_TEMP\pt.zip" https://dl.google.com/android/repository/platform-tools-latest-windows.zip
+          Expand-Archive -Force "$env:RUNNER_TEMP\pt.zip" "$env:RUNNER_TEMP\pt"
+          Move-Item "$env:RUNNER_TEMP\pt\platform-tools" "C:\stage_rt\adb"
+          Write-Host "ADB OK"
+
+      - name: Bungkus Runtime-QEMU-ADB.zip
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          Move-Item "C:\qemu_portable" "C:\stage_rt\qemu"
+          Compress-Archive -Path "C:\stage_rt\*" -DestinationPath "Runtime-QEMU-ADB.zip" -Force
+          Get-Item "Runtime-QEMU-ADB.zip" | Select-Object Name,Length
+
+      - name: Lampirkan ke Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: Runtime-QEMU-ADB.zip
+
+  # ------------------------------------------------------------
+  # JOB 3: pre-install Android ke disk virtual (otomatis penuh)
+  #         kalau gagal -> fallback: lampirkan ISO terpecah 2
+  # ------------------------------------------------------------
+  android:
+    needs: runtime
+    runs-on: windows-latest
+    timeout-minutes: 300
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Pasang Python + Pillow
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Pasang dependensi
+        run: |
+          python -m pip install --upgrade pillow
+          choco install 7zip -y
+
+      - name: Pasang QEMU (silent)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          curl.exe -L --retry 5 -o "$env:RUNNER_TEMP\qemu-setup.exe" https://qemu.weilnetz.de/w64/qemu-w64-setup-20260811.exe
+          Start-Process "$env:RUNNER_TEMP\qemu-setup.exe" -ArgumentList "/S","/D=C:\qemu_portable" -Wait
+          if (-not (Test-Path "C:\qemu_portable\qemu-system-x86_64.exe")) { throw "QEMU gak terpasang" }
+
+      - name: Download ISO BlissOS 16 GApps
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          New-Item -ItemType Directory -Force -Path "C:\aw" | Out-Null
+          curl.exe -L --retry 5 -o "C:\aw\bliss.iso" "https://downloads.sourceforge.net/project/blissos-x86/Official/BlissOS16/Gapps/Generic/Bliss-v16.9.7-x86_64-OFFICIAL-gapps-20241011.iso"
+          $iso = Get-Item "C:\aw\bliss.iso"
+          if ($iso.Length -lt 1GB) { throw "ISO kurang lengkap" }
+          Write-Host ("ISO: " + [math]::Round($iso.Length/1GB,2) + " GB")
+
+      - name: Ekstrak kernel/initrd + parse parameter boot Auto-Install
+        shell: pwsh
+        run: |
+          python scripts/autoinstall.py parse-grub --iso "C:\aw\bliss.iso" --sevenzip "C:\Program Files\7-Zip\7z.exe" --outdir "C:\aw\boot"
+          Get-Content "C:\aw\boot\append.txt"
+
+      - name: Bikin disk virtual 40 GB
+        shell: pwsh
+        run: |
+          & "C:\qemu_portable\qemu-img.exe" create -f qcow2 "C:\aw\base.qcow2" 40G
+          Get-Item "C:\aw\base.qcow2" | Select-Object Name,Length
+
+      - name: Jalankan auto-install Android (30-90 menit)
+        shell: pwsh
+        run: |
+          python scripts/autoinstall.py run `
+            --qemu "C:\qemu_portable\qemu-system-x86_64.exe" `
+            --qemu-img "C:\qemu_portable\qemu-img.exe" `
+            --disk "C:\aw\base.qcow2" --iso "C:\aw\bliss.iso" `
+            --bootdir "C:\aw\boot" --outdir "C:\aw\logs" --timeout 240
+
+      - name: Kompres & pecah disk jadi bagian < 1.5 GB
+        id: pack
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          if (Test-Path "C:\aw\logs\status.json") {
+            $st = Get-Content "C:\aw\logs\status.json" | ConvertFrom-Json
+            Write-Host ("status.json: " + ($st | ConvertTo-Json -Compress))
+            if (-not $st.ok) { throw "auto-install dilaporkan belum sukses oleh status.json" }
+          } else {
+            throw "status.json gak ada - auto-install gagal total"
+          }
+          & "C:\qemu_portable\qemu-img.exe" convert -c -O qcow2 "C:\aw\base.qcow2" "C:\aw\base-c.qcow2"
+          $sz = (Get-Item "C:\aw\base-c.qcow2").Length
+          Write-Host ("Disk terkompres: " + [math]::Round($sz/1GB,2) + " GB")
+          if ($sz -lt 400MB) { throw "Disk hasil install kecil sekali - kemungkinan gagal" }
+          $chunk = 1500MB
+          $buf = New-Object byte[] (64MB)
+          $i = 1
+          $in = [IO.File]::OpenRead("C:\aw\base-c.qcow2")
+          try {
+            while (($read = $in.Read($buf, 0, $buf.Length)) -gt 0) {
+              $name = "android-base.qcow2.part{0:D2}" -f $i
+              $out = [IO.File]::OpenWrite($name)
+              try { $out.Write($buf, 0, $read) } finally { $out.Close() }
+              $i++
+            }
+          } finally { $in.Close() }
+          $hash = Get-ChildItem "android-base.qcow2.part*" | ForEach-Object {
+            "$((Get-FileHash $_.FullName -Algorithm SHA256).Hash)  $($_.Name)"
+          }
+          $hash | Set-Content "SHA256SUMS.txt" -Encoding ASCII
+          Get-ChildItem "android-base.qcow2.part*","SHA256SUMS.txt" | Format-Table Name,Length
+          "parts" | Set-Content "C:\aw\mode.txt"
+
+      - name: Lampirkan disk Android (hasil pre-install) ke Release
+        if: steps.pack.outcome == 'success'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            android-base.qcow2.part*
+            SHA256SUMS.txt
+
+      - name: FALLBACK - kalau pre-install gagal, pecah ISO-nya saja
+        if: failure()
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          Write-Host "Pre-install gagal -> pakai mode ISO (install manual sekali klik)"
+          $chunk = 1200MB
+          $buf = New-Object byte[] (64MB)
+          $i = 1
+          $in = [IO.File]::OpenRead("C:\aw\bliss.iso")
+          try {
+            while (($read = $in.Read($buf, 0, $buf.Length)) -gt 0) {
+              $name = "BlissOS16-GApps.iso.part{0:D2}" -f $i
+              $out = [IO.File]::OpenWrite($name)
+              try { $out.Write($buf, 0, $read) } finally { $out.Close() }
+              $i++
+            }
+          } finally { $in.Close() }
+          $hash = Get-ChildItem "BlissOS16-GApps.iso.part*" | ForEach-Object {
+            "$((Get-FileHash $_.FullName -Algorithm SHA256).Hash)  $($_.Name)"
+          }
+          $hash | Set-Content "SHA256SUMS.txt" -Encoding ASCII
+          Get-ChildItem "BlissOS16-GApps.iso.part*","SHA256SUMS.txt" | Format-Table Name,Length
+
+      - name: Lampirkan ISO (mode fallback) ke Release
+        if: failure()
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            BlissOS16-GApps.iso.part*
+            SHA256SUMS.txt
+
+      - name: Upload log & screendump (buat diagnosis)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: autoinstall-logs
+          path: |
+            C:\aw\logs\**
+            C:\aw\boot\grub-dump.txt
+          if-no-files-found: ignore
+          retention-days: 7

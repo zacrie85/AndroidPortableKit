@@ -11,14 +11,20 @@ Ambil dari halaman **[Releases](https://github.com/zacrie85/AndroidPortableKit/r
 
 | File | Kegunaan |
 |------|----------|
-| `AndroidPortableKit.zip` | **PAKAI YANG INI** — paket lengkap (exe launcher + setup + panduan) |
+| `AndroidPortableKit.zip` | **Program utama** (exe launcher + setup + panduan) |
+| `Runtime-QEMU-ADB.zip` | Mesin virtual QEMU + ADB (buat mode offline) |
+| `android-base.qcow2.part01`, `part02`, ... | Sistem Android **sudah terpasang**, tinggal digabung (mode offline) |
 | `AndroidPortable.exe` | Launcher saja (untuk update manual / pemakai lanjutan) |
 
-## Mulai Cepat
+> Mode offline: download SEMUA file ke satu folder, extract `AndroidPortableKit.zip`,
+> pindahkan file lain ke dalamnya, lalu jalankan `1-Siapkan-Offline.bat` —
+> **tanpa internet sama sekali**.
 
-1. Ekstrak `AndroidPortableKit.zip` ke path **tanpa spasi** (contoh: `C:\AndroidPortable`)
-2. (Disarankan) Aktifkan *Windows Hypervisor Platform* lewat Windows Features → restart
-3. Jalankan `1-Setup-Awal.bat` (sekali saja, download QEMU + ADB + ISO Android)
+## Mulai Cepat (Offline)
+
+1. Download semua file release ke satu folder
+2. Extract `AndroidPortableKit.zip` → masukkan file lain ke folder hasilnya
+3. Jalankan `1-Siapkan-Offline.bat` (merakit semua, tanpa internet)
 4. Jalankan `2-Buka-Launcher.bat` → klik **JALANKAN ANDROID**
 5. Login Google → install TikTok/IG/SnackVideo/YT dari Play Store
 6. Klik **KIRIM VIDEO DARI PC** → pilih video → upload + tulis caption di app
