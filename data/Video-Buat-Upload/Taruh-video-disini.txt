@@ -1,0 +1,11 @@
+Taruh video yang mau diupload di folder ini (boleh subfolder juga).
+
+Cara pakai:
+1. Copy/geret video kamu ke folder ini dari mana saja di PC
+2. Buka Android Portable Kit, nyalakan Android
+3. Klik tombol "KIRIM VIDEO DARI PC"
+4. Pilih video dari folder ini (atau dari folder lain lewat jendela pilih file)
+5. Video muncul di galeri Android -> buka TikTok/Instagram/SnackVideo/YouTube
+6. Tekan tombol upload (+), pilih video, tulis caption & judul, POST!
+
+Format yang disarankan: MP4 (H.264 + AAC) - paling aman untuk semua app.

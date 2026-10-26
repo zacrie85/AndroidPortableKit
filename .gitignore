@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+launcher/build/
+launcher/dist/
+runtime/qemu/
+runtime/adb/
+runtime/android/
+config/config.json
+AndroidPortableKit.zip
+Update-Launcher.bat
+*.new
+*.part

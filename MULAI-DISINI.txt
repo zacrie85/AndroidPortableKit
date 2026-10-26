@@ -1,0 +1,49 @@
+=========================================================
+   MULAI DISINI - ANDROID PORTABLE KIT
+   Nonton & upload video TikTok / Instagram / SnackVideo /
+   YouTube langsung dari Windows, tanpa install apapun
+=========================================================
+
+KEBUTUHAN:
+- Windows 10 / 11 (64-bit)
+- RAM minimal 8 GB (disarankan)
+- Ruang disk kosong minimal 10 GB
+- Koneksi internet (cuma buat setup awal & download app di Play Store)
+
+LANGKAH SINGKAT:
+---------------------------------------------------------
+[1] Ekstrak folder "AndroidPortableKit" ini ke path TANPA SPASI.
+    Contoh paling aman:  C:\AndroidPortable
+
+[2] (Disarankan) Aktifkan biar kenceng:
+    Start Menu > ketik "Turn Windows features on or off"
+    > centang "Windows Hypervisor Platform" > Restart PC
+
+[3] Klik dua kali:  1-Setup-Awal.bat
+    - Ikuti proses download (QEMU ~197 MB + ADB + ISO Android ~2.4 GB)
+    - Nanti muncul jendela virtual, di situ pilih:
+        "Auto Install to specified harddisk" -> sda -> ext4 -> YES
+      Tunggu sampai "Installation is complete", lalu Reboot/tutup jendela.
+
+[4] (Sekali aja) Klik dua kali:  launcher\BUILD-EXE.bat
+    -> bikin AndroidPortable.exe (butuh Python, link di PANDUAN-LENGKAP)
+
+[5] Klik dua kali:  2-Buka-Launcher.bat
+    -> Klik "JALANKAN ANDROID" -> tunggu layar Android muncul
+
+[6] Di dalam Android:
+    - Login akun Google kamu
+    - Buka Play Store -> install TikTok, Instagram, SnackVideo, YouTube
+
+[7] BUAT UPLOAD VIDEO:
+    - Di launcher klik "KIRIM VIDEO DARI PC" -> pilih video kamu
+    - Video muncul di galeri Android
+    - Buka TikTok/IG/SnackVideo/YT -> tombol upload (+) -> pilih video
+      -> tulis caption/judul -> POST!
+
+[8] BUAT MULTI-AKUN (CLONE):
+    - Klik "+ Profile Baru" di launcher (misal: Akun-2)
+    - Jalankan barengan: profile Utama + Akun-2 jalan di 2 jendela
+    - Tiap profile = data & akun terpisah total
+
+SELESAI! Detail lengkap + troubleshooting ada di PANDUAN-LENGKAP.txt

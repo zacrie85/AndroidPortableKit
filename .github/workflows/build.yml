@@ -1,0 +1,57 @@
+name: Build AndroidPortable.exe
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Pasang Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Pasang PyInstaller
+        run: python -m pip install --upgrade pyinstaller
+
+      - name: Build EXE launcher
+        working-directory: launcher
+        run: python -m PyInstaller --noconsole --onefile --name AndroidPortable ap_gui.py
+
+      - name: Kumpulkan file kit + bungkus zip
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $stage = "stage/AndroidPortableKit"
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+          Copy-Item MULAI-DISINI.txt,PANDUAN-LENGKAP.txt,README.md,1-Setup-Awal.bat,2-Buka-Launcher.bat $stage/
+          Copy-Item config -Destination $stage -Recurse -Force
+          Copy-Item scripts -Destination $stage -Recurse -Force
+          Copy-Item data -Destination $stage -Recurse -Force
+          New-Item -ItemType Directory -Force -Path "$stage/launcher" | Out-Null
+          Copy-Item launcher/ap_core.py,launcher/ap_gui.py,launcher/BUILD-EXE.bat,launcher/requirements.txt "$stage/launcher/"
+          New-Item -ItemType Directory -Force -Path "$stage/runtime" | Out-Null
+          Copy-Item runtime/.keep "$stage/runtime/"
+          Copy-Item launcher/dist/AndroidPortable.exe "$stage/AndroidPortable.exe"
+          Compress-Archive -Path $stage/* -DestinationPath AndroidPortableKit.zip -Force
+          Copy-Item launcher/dist/AndroidPortable.exe AndroidPortable.exe
+          Write-Host "Isi stage:"; Get-ChildItem $stage | Format-Table Name,Length
+
+      - name: Bikin GitHub Release + lampirkan file
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "Android Portable Kit ${{ github.ref_name }}"
+          files: |
+            AndroidPortable.exe
+            AndroidPortableKit.zip
+          generate_release_notes: true

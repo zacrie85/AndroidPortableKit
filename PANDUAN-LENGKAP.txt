@@ -1,0 +1,212 @@
+=====================================================================
+   PANDUAN LENGKAP - ANDROID PORTABLE KIT v1.0
+   Jalankan Android di Windows secara portable:
+   TikTok / Instagram / SnackVideo / YouTube (nonton + upload video)
+=====================================================================
+
+---------------------------------------------------------------
+BAGIAN 1 - APA INI?
+---------------------------------------------------------------
+Android Portable Kit adalah "Android PC dalam satu folder".
+Di dalamnya ada:
+  - QEMU portable  : mesin virtual ringan, TIDAK perlu install ke Windows
+  - ADB            : jalur komunikasi PC <-> Android (kirim video & APK)
+  - BlissOS 16     : sistem Android 13 yang dipasang ke disk virtual,
+                     versi GAPPS jadi Play Store sudah ikut di dalamnya
+  - Launcher GUI   : tombol-tombol enak (jalankan Android, kirim video,
+                     install APK, bikin profile multi-akun)
+
+Kenapa portable? Karena semua data ada di folder kit ini.
+Mau pindah PC? Copy folder-nya, jalan lagi. Mau bawa flashdisk? Boleh
+(asalkan kapasitas cukup dan kecepatan USB 3.0 ke atas, karena disk
+Android dibaca dari situ).
+
+ISI FOLDER:
+  1-Setup-Awal.bat            -> setup pertama (sekali aja)
+  2-Buka-Launcher.bat         -> buka launcher GUI
+  launcher\                   -> source GUI + BUILD-EXE.bat
+  scripts\setup.ps1           -> mesin setup otomatis
+  config\links.ini            -> daftar link download (bisa diganti mirror)
+  config\config.json          -> pengaturan RAM/CPU/dll (dibuat otomatis)
+  data\Video-Buat-Upload\     -> saran tempat naro video sebelum dikirim
+  data\profiles\              -> data tiap akun/profile Android
+  runtime\                    -> QEMU, ADB, disk Android (dibuat saat setup)
+
+---------------------------------------------------------------
+BAGIAN 2 - SYARAT & PERSIAPAN
+---------------------------------------------------------------
+1. Windows 10 / 11 64-bit.
+2. RAM 8 GB ke atas ideal. 4 GB masih bisa tapi harus sayang-sayang RAM
+   (di config.json turunkan ram_mb jadi 1536).
+3. Ruang disk kosong 10 GB+.
+4. Virtualisasi CPU (sangat disarankan):
+   - Masuk BIOS dan pastikan "Intel VT-x" / "AMD-V" aktif, ATAU
+   - Windows: aktifkan fitur "Windows Hypervisor Platform":
+     Start Menu > "Turn Windows features on or off"
+     > centang Windows Hypervisor Platform > Restart
+   - Cek: kalau di log launcher tertulis "Akselerasi: WHPX (cepat)"
+     berarti sukses. Kalau "TCG (lambat)" berarti belum dapat
+     virtualisasi - masih jalan sih, cuma lemot kaya PC kentang.
+5. Python 3.9+ (cuma dibutuhkan sekali buat bikin .exe):
+   https://www.python.org/downloads/  -> saat install CENTANG
+   "Add Python to PATH".
+
+---------------------------------------------------------------
+BAGIAN 3 - SETUP PERTAMA (LANGKAH DEMI LANGKAH)
+---------------------------------------------------------------
+1. Ekstrak kit ke path TANPA SPASI, contoh: C:\AndroidPortable
+   (path ada spasi = beberapa langkah setup bisa gagal).
+2. Klik dua kali 1-Setup-Awal.bat. Proses:
+   a. Download QEMU (~197 MB) lalu dipasang ke folder runtime\qemu
+      secara portable (tidak menyentuh registry Windows).
+   b. Download ADB platform-tools dari server Google (~6 MB).
+   c. Download ISO Android:
+        Pilihan 1 = BlissOS 16 GApps 2.4 GB (Android 13 + Play Store)
+        Pilihan 2 = Android-x86 9 (~900 MB, ringan, GApps manual)
+        Pilihan 3 = Manual, kamu download sendiri taruh di
+                    runtime\android\iso\
+   d. Disk virtual 40 GB dibuat (file qcow2 TIPIS, tumbuh sesuai isi).
+   e. Muncul jendela QEMU dengan menu boot Android:
+        - Pilih "Auto Install to specified harddisk"
+        - Disk: pilih sda (yang 40 GB)
+        - Filesystem: ext4
+        - Konfirmasi: YES (jika diminta)
+        - Tunggu "Installation is complete" -> Reboot / tutup jendela
+   f. Profile pertama "Utama" dibuat otomatis. Selesai!
+3. Klik dua kali launcher\BUILD-EXE.bat -> jadi AndroidPortable.exe
+   di folder utama. (Hanya jika ingin versi .exe; tanpa ini juga bisa
+   jalan pakai 2-Buka-Launcher.bat asal Python terpasang.)
+
+---------------------------------------------------------------
+BAGIAN 4 - CARA PAKAI SEHARI-HARI
+---------------------------------------------------------------
+MENJALANKAN ANDROID:
+- Buka 2-Buka-Launcher.bat (atau AndroidPortable.exe).
+- Pilih profile (pertama: "Utama") -> klik JALANKAN ANDROID.
+- Tunggu beberapa menit sampai layar Android muncul & log bilang
+  "ADB siap". Tips mouse: tekan Ctrl+Alt+G untuk lepas tangkapan mouse
+  dari jendela Android.
+
+LOGIN & INSTALL APLIKASI:
+- Di Android: login akun Google kamu (seperti HP biasa).
+- Buka Play Store, install TikTok, Instagram, SnackVideo, YouTube, dll.
+- Atau pakai tombol "Install APK" di launcher kalau kamu punya file
+  .apk sendiri (harus .apk biasa, bukan .xapk/.apks).
+
+MENONTON:
+- Jalankan app-nya seperti di HP. Scroll, like, komentar - bebas.
+- Resolusi jendela bisa diresize; audio keluar dari speaker PC.
+
+UPLOAD VIDEO (FITUR INTI):
+1. Siapkan video di PC (disarankan MP4 H.264 + AAC).
+   Tempat nyaman: folder data\Video-Buat-Upload.
+2. Di launcher: pastikan Android nyala & terpilih di dropdown
+   "Kirim ke" -> klik "KIRIM VIDEO DARI PC".
+3. Jendela pemilih file Windows (Explorer) muncul -> pilih video
+   (bisa banyak sekaligus).
+4. Video dikirim ke galeri Android (folder Movies/AndroidPortable)
+   dan galeri otomatis di-refresh.
+5. Di Android: buka app tujuan (misal TikTok) -> tekan tombol +
+   (upload) -> pilih video dari galeri -> tulis CAPTION, JUDUL,
+   hashtag, dsb langsung di app -> POST!
+6. Untuk YouTube: buka YouTube -> ikon + (buat) -> Upload video ->
+   pilih video -> isi judul, deskripsi -> Publish.
+
+MULTI-AKUN / CLONE (MULTI-RUN):
+- Klik "+ Profile Baru", beri nama (contoh: Akun-2, Akun-Kedai).
+- Tiap profile punya disk sendiri: app, akun, dan datanya terpisah
+  total - seperti HP kedua, ketiga, dst.
+- Jalankan beberapa profile bersamaan dari dropdown profile.
+  CATATAN: instance kedua dst otomatis dibatasi RAM 2 GB biar stabil.
+- Hapus profile = klik "Hapus Profile" (data akun itu hilang permanen,
+  jangan sampai salah pilih).
+
+MATIKAN:
+- Klik "Matikan Terpilih" / "Matikan Semua". Android dimatikan dengan
+  rapi (seperti power off HP) biar data aman.
+
+---------------------------------------------------------------
+BAGIAN 5 - PENGATURAN (config/config.json)
+---------------------------------------------------------------
+- ram_mb      : RAM buat tiap instance (2048-4096 disarankan)
+- cpu_cores   : core CPU buat Android (2-4)
+- accel       : auto | whpx | tcg
+- vga         : std (default aman) | virtio (coba kalau layar bermasalah)
+- display     : sdl (default) | gtk
+- machine     : pc (default) | q35
+- base_port   : port ADB mulai (default 5555; instance berikut +1)
+- adb_wait_seconds : batas nunggu Android siap (default 180)
+
+---------------------------------------------------------------
+BAGIAN 6 - TROUBLESHOOTING
+---------------------------------------------------------------
+[Q] Setup bilang "QEMU gagal terpasang" atau path ada spasi.
+    -> Pindahkan kit ke C:\AndroidPortable, jalankan ulang setup.
+
+[Q] Download ISO selalu gagal/gagal di tengah.
+    -> Jalankan ulang setup (download bisa lanjut/resume).
+    -> Atau download manual dari link di config\links.ini, taruh di
+       runtime\android\iso\, lalu jalankan setup pilih mode Manual (3).
+
+[Q] Menu boot Android gak muncul / boot nyangkut.
+    -> Pastikan langkah "Auto Install" benar-benar selesai sebelum
+       menutup jendela (lihat pesan "Installation is complete").
+    -> Masih gagal: coba ISO pilihan 2 (Android-x86 9) yang lebih ramah
+       virtualisasi, atau ganti "vga": "virtio" di config.json lalu
+       setup ulang.
+
+[Q] Android jalan tapi SANGAT lambat (lag parah).
+    -> Log bilang "TCG (lambat)" = virtualisasi belum aktif.
+       Aktifkan Windows Hypervisor Platform + VT-x/AMD-V di BIOS.
+    -> Naikkan ram_mb & cpu_cores di config.json sesuai spek.
+
+[Q] Launcher bilang ADB belum nyambung padahal layar Android udah muncul.
+    -> Di Android: Settings > (System) > Developer options > aktifkan
+       "ADB over Network". Kalau menu developer belum ada: buka
+       Settings > About > tap "Build number" 7 kali.
+    -> Tunggu 1-2 menit lalu coba aksi lagi (tombol Kirim Video juga
+       otomatis mencoba nyambung ulang).
+
+[Q] Video udah terkirim tapi gak muncul di galeri TikTok.
+    -> Buka app Files/Explorer di Android > Internal storage >
+       Movies > AndroidPortable > pilih videonya dari situ
+       (TikTok/IG juga punya opsi "Browse/Buka folder" di pemilih media).
+    -> Atau kirim ulang videonya (refresh galeri dijalanin ulang).
+
+[Q] TikTok/Instagram gak bisa dipasang dari Play Store (bilang tidak
+    kompatibel).
+    -> Itu artinya app-nya butuh versi/arsitektur tertentu. Unduh file
+       .apk (dari situs APK resmi seperti APKMirror) lalu pakai tombol
+       "Install APK" di launcher. BlissOS punya ARM translation jadi
+       app ARM biasanya tetap jalan.
+
+[Q] Mau nulis caption pakai keyboard PC.
+    -> Bisa langsung: keyboard PC nyambung otomatis ke Android.
+       (Di jendela SDL, keyboard mengikuti jendela yang aktif.)
+
+[Q] Mouse "nyangkut" di jendela Android.
+    -> Tekan Ctrl+Alt+G buat lepas.
+
+[Q] Antivirus ngamuk pas setup/build exe.
+    -> QEMU dan PyInstaller kadang kena false positive. Tambahkan
+       folder kit ke exclusion antivirus kamu (folder kit ini 100%
+       script terbuka, bisa dibaca semua isinya).
+
+[Q] Mau pindah kit ke flashdisk/PC lain.
+    -> Matikan semua Android dulu, copy seluruh folder, jalankan
+       launcher di tempat baru. Launcher otomatis memperbaiki path
+       disk dasar (fitur rebase portable).
+
+---------------------------------------------------------------
+BAGIAN 7 - CATATAN PENTING & LEGAL
+---------------------------------------------------------------
+- Kit ini cuma "pembungkus"; sistem Android-nya BlissOS/Android-x86
+  (open source) dan app-nya kamu pakai dengan akun kamu sendiri.
+- Patuhi aturan layanan (ToS) dari TikTok/Instagram/SnackVideo/YouTube.
+  Multi-akun yang dipakai untuk spam bisa kena banned dari pihak app.
+- Jangan jual ulang kit ini dengan menyertakan ISO Android;
+  ISO-nya gratis, ambil sendiri dari sumber resminya.
+- Google account di instance ini dihitung sebagai device baru -
+  kadang Google minta verifikasi ekstra saat login pertama. Normal.
+
+Selamat nonton & upload, kawan! :)
