@@ -187,8 +187,12 @@ class Monitor:
 
 
 def mode_run(a):
+    """Serial-console automation (expect-style).
+
+    console=ttyS0 jadi /dev/console -> SEMUA prompt installer kelihatan di
+    serial dan jawaban dikirim langsung ke serial socket. Tanpa nebak tombol.
+    """
     qemu = a.qemu
-    qemu_img = a.qemu_img
     bootdir = Path(a.bootdir)
     outdir = Path(a.outdir)
     outdir.mkdir(parents=True, exist_ok=True)
@@ -198,11 +202,12 @@ def mode_run(a):
     # AUTO_INSTALL=force: lewati dialog "last confirmation" (--defaultno) yang
     # FATAL kalau kena Enter (default No = reboot). Lihat 1-install baris 140.
     append = append.replace("AUTO_INSTALL=0", "AUTO_INSTALL=force")
-    # FORCE_FORMAT=ext4: kernel meneruskan parameter tak-dikenal sebagai env var
-    # -> installer auto-memilih ext4 tanpa dialog (set_answer_if_auto $FORCE_FORMAT)
-    append = append + " FORCE_FORMAT=ext4"
+    # FORCE_FORMAT=ext4: auto-pilih filesystem (kernel passer env ke init)
+    # console=ttyS0 TERAKHIR -> /dev/console = serial (prompt + dialog di serial)
+    append = append + " FORCE_FORMAT=ext4 console=tty0 console=ttyS0,115200"
     kernel = bootdir / "kernel.img"
     initrd = bootdir / "initrd.img"
+    serial_sock = outdir / "serial.sock"
 
     cmd = [
         qemu,
@@ -220,105 +225,145 @@ def mode_run(a):
         "-display", "none",
         "-no-reboot",
         "-net", "none",
-        "-serial", f"file:{(outdir / 'serial.log').as_posix()}",
+        "-serial", f"unix:{serial_sock.as_posix()},server,nowait",
         "-monitor", "tcp:127.0.0.1:4444,server,nowait",
         "-rtc", "base=localtime",
     ]
-    log("Booting installer: " + " ".join(cmd[:14]) + " ...")
+    log("Booting installer (serial mode): " + " ".join(cmd[:12]) + " ...")
     t0 = time.time()
     proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL,
                             stderr=subprocess.STDOUT)
-    try:
-        mon = Monitor()
-    except RuntimeError as e:
-        log(str(e))
+
+    # konek ke serial unix socket (QEMU server,nowait -> boleh telat)
+    ser = None
+    for _ in range(90):
+        try:
+            ser = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            ser.connect(str(serial_sock))
+            break
+        except OSError:
+            ser = None
+            time.sleep(1)
+    if ser is None:
+        log("gagal konek serial socket")
         proc.kill()
         return 1
-    log("Monitor HMP konek.")
+    ser.settimeout(2)
+    log("Serial socket konek.")
 
+    hmp = None
+    for _ in range(30):
+        try:
+            hmp = socket.create_connection(("127.0.0.1", 4444), timeout=5)
+            break
+        except OSError:
+            time.sleep(1)
+    if hmp is not None:
+        hmp.settimeout(3)
+
+    def hmp_cmd(c):
+        try:
+            hmp.sendall((c + "\n").encode())
+            time.sleep(0.5)
+            return hmp.recv(65536).decode("utf-8", "replace")
+        except Exception:
+            return ""
+
+    log_file = open(outdir / "serial.log", "wb")
+    buf = ""
+    responded = {}          # pattern -> jumlah respons terkirim
     dump_dir = outdir / "screens"
     dump_dir.mkdir(exist_ok=True)
-    dump_count = [0]
+    dump_n = [0]
 
     def screendump():
-        dump_count[0] += 1
-        ppm = dump_dir / f"tmp.ppm"
-        try:
-            mon.send(f"screendump {ppm.as_posix()}")
-        except Exception as e:
-            log(f"screendump gagal: {e}")
-            return
-        time.sleep(1.5)
+        dump_n[0] += 1
+        hmp_cmd(f"screendump { (dump_dir / ('s%03d.ppm' % dump_n[0])).as_posix() }")
+        time.sleep(1.0)
+        ppm = dump_dir / f"s{dump_n[0]:03d}.ppm"
         if ppm.exists() and ppm.stat().st_size > 1000:
-            png = dump_dir / f"stage-{dump_count[0]:03d}.png"
             try:
                 from PIL import Image
-                Image.open(ppm).save(png)
+                Image.open(ppm).save(str(ppm.with_suffix(".png")))
                 ppm.unlink()
             except Exception:
-                png = dump_dir / f"stage-{dump_count[0]:03d}.ppm"
-                ppm.rename(png)
-        else:
-            if ppm.exists():
-                ppm.unlink()
+                pass
+
+    # (pola, jawaban, nama) — jawaban dikirim SATU kali per kemunculan pola
+    RULES = [
+        ("Are you sure you want to continue (y/n)?", "n\r",
+         "prompt y/n (jawab n -> install)"),
+        ("Would you like to customize the formatted drive name", "\r",
+         "inputbox nama drive (default)"),
+        ("Are you sure to create the image?", "\r",
+         "data image -> Yes"),
+        ("Please input the size of the data.img", "\r",
+         "ukuran data.img (default 2048)"),
+        ("Do you want to force format", "\x1b[D\r",
+         "error mount -> force format Yes"),
+        ("is installed successfully", "MENU_END",
+         "Congratulations -> pilih Reboot"),
+    ]
 
     deadline = t0 + a.timeout * 60
-
-    # Jadwal tombol berdasarkan REVERSE-ENGINEERING installer BlissOS
-    # (init dari initrd.img + scripts/1-install dari install.img):
-    #   t=40-60  : prompt console "...(y/n)?" muncul 2 KALI (init re-exec cttyhack)
-    #              -> jawaban APAPUN selain y/n-kosong tetap install; kirim 'n'+ret 2x
-    #   (AUTO_INSTALL=force membuat dialog "last confirmation" --defaultno DILEWATI)
-    #   t=110-140: inputbox nama drive -> 'ret' terima default "BlissOS"
-    #   t=600+   : 'down'+'ret' tiap 90 dtk -> data-yesno=Yes, size=2048 default,
-    #              menu akhir "Congratulations" pilih item 2 "Reboot" -> QEMU keluar
-    events = [(50, "n"), (52, "ret"),
-              (75, "n"), (77, "ret"),
-              (95, "ret"), (115, "ret"), (135, "ret"), (155, "ret"),
-              (175, "ret"), (195, "ret"), (215, "ret"), (235, "ret"),
-              (255, "ret"), (280, "ret"), (310, "ret"), (340, "ret"),
-              (370, "ret"), (400, "ret"), (430, "ret"), (460, "ret"),
-              (490, "ret"), (520, "ret"), (560, "ret")]
-    ei = 0
-    next_periodic = t0 + 600          # fase akhir: down+ret tiap 90 dtk
-    next_dump = t0 + 40
-    exited = False
-
-    def try_send(k):
-        try:
-            mon.send(f"sendkey {k}")
-            return True
-        except Exception as e:
-            log(f"monitor gak bisa kirim '{k}': {e}")
-            return False
+    next_dump = t0 + 60
+    saw_rebooting = False
+    congratulated = False
+    last_data = time.time()
 
     while time.time() < deadline:
         if proc.poll() is not None:
-            exited = True
-            log(f"QEMU keluar sendiri (elapsed {int(time.time()-t0)}s) - "
-                f"installer kelihatannya selesai.")
+            log(f"QEMU keluar (elapsed {int(time.time()-t0)}s)")
             break
-        elapsed = time.time() - t0
-        if ei < len(events) and elapsed >= events[ei][0]:
-            k = events[ei][1]
-            log(f"Kirim '{k}' (jadwal #{ei+1}, t={int(elapsed)}s)")
-            try_send(k)
-            ei += 1
-        elif ei >= len(events) and time.time() >= next_periodic:
-            log("Kirim 'down'+'ret' (fase akhir: menu akhir -> Reboot)")
-            try_send("down")
-            time.sleep(0.4)
-            try_send("ret")
-            next_periodic = time.time() + 90
+        # baca serial
+        got = b""
+        try:
+            got = ser.recv(65536)
+        except socket.timeout:
+            pass
+        except OSError:
+            pass
+        if got:
+            last_data = time.time()
+            log_file.write(got)
+            log_file.flush()
+            try:
+                buf += got.decode("utf-8", "replace")
+            except Exception:
+                pass
+            # jalankan aturan jawaban
+            for pat, ans, name in RULES:
+                n_seen = buf.count(pat)
+                n_sent = responded.get(pat, 0)
+                while n_sent < n_seen:
+                    if ans == "MENU_END":
+                        log(f"SELESAI INSTALL! ({name}) - pilih Reboot")
+                        congratulated = True
+                        ser.sendall(b"\x1b[B")      # panah bawah -> Reboot
+                        time.sleep(1.5)
+                        ser.sendall(b"\r")
+                    else:
+                        log(f"JAWAB: {name} -> {ans!r}")
+                        ser.sendall(ans.encode())
+                    responded[pat] = n_sent + 1
+                    n_sent += 1
+            if "Rebooting" in buf and not saw_rebooting:
+                saw_rebooting = True
+                log(">>> 'Rebooting' terlihat - INSTALL BERHASIL! <<<")
+        # dump berkala
         if time.time() >= next_dump:
             screendump()
-            next_dump = time.time() + (30 if dump_count[0] < 12 else 90)
-        time.sleep(3)
+            next_dump = time.time() + 120
+        # diam total > 10 menit pasca-congrats -> kemungkinan hang, catet aja
+        if congratulated and time.time() - last_data > 600:
+            log("Serial diam lama setelah Congratulations - kemungkinan VM hang.")
+        time.sleep(1)
 
-    if not exited:
-        log(f"Timeout {a.timeout} menit - matiin VM paksa.")
+    log_file.close()
+    if proc.poll() is None:
+        log("Timeout - matiin VM.")
         try:
-            mon.send("quit")
+            hmp_cmd("quit")
         except Exception:
             pass
         time.sleep(5)
@@ -327,24 +372,16 @@ def mode_run(a):
 
     elapsed = int(time.time() - t0)
     raw = disk.stat().st_size if disk.exists() else 0
-    status = {
-        "exited": exited,
-        "elapsed_sec": elapsed,
-        "disk_raw_bytes": raw,
-        "disk_raw_gb": round(raw / 1024**3, 2),
-    }
-    ok = exited and elapsed >= 240 and raw > 2 * 1024**3
-    status["ok"] = ok
+    # Sukses HANYA jika installer sendiri mengirim "Rebooting" (tanda selesai)
+    # dan disk beneran terisi (sistem + data image).
+    ok = saw_rebooting and (raw > 2 * 1024**3) and elapsed >= 240
+    status = {"elapsed_sec": elapsed, "disk_raw_bytes": raw,
+              "disk_raw_gb": round(raw / 1024**3, 2),
+              "saw_rebooting": saw_rebooting, "ok": ok}
     (outdir / "status.json").write_text(json.dumps(status, indent=2))
     log("STATUS: " + json.dumps(status))
-    try:
-        screendump()  # frame terakhir buat diagnosis
-    except Exception:
-        pass
     return 0 if ok else 1
 
-
-# ---------------------------------------------------------------------------
 
 def main():
     p = argparse.ArgumentParser()
