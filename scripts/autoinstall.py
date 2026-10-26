@@ -314,10 +314,15 @@ def mode_run(a):
             except Exception:
                 pass
 
-    # (pola, jawaban, nama) — jawaban dikirim SATU kali per kemunculan pola
+    # (pola, jawaban, nama) — jawaban dikirim SATU kali per kemunculan pola.
+    # Jawaban boleh string ATAU tuple (jawaban per kemunculan ke-N,
+    # kemunculan berikutnya memakai yang terakhir).
+    # Hasil analisa serial.log CI: prompt y/n muncul 2x:
+    #   ke-1: 'n' -> memulai installer ("Starting Installer")
+    #   ke-2: 'y' -> konfirmasi install beneran (kalau 'n' = batal!)
     RULES = [
-        ("Are you sure you want to continue (y/n)?", "n\r",
-         "prompt y/n (jawab n -> install)"),
+        ("Are you sure you want to continue (y/n)?", ("n\r", "y\r"),
+         "y/n (ke-1: n -> mulai installer, ke-2: y -> lanjut install)"),
         ("Would you like to customize the formatted drive name", "\r",
          "inputbox nama drive (default)"),
         ("Are you sure to create the image?", "\r",
@@ -368,8 +373,11 @@ def mode_run(a):
                         time.sleep(1.5)
                         ser.sendall(b"\r")
                     else:
-                        log(f"JAWAB: {name} -> {ans!r}")
-                        ser.sendall(ans.encode())
+                        a = ans
+                        if isinstance(ans, (list, tuple)):
+                            a = ans[min(n_sent, len(ans) - 1)]
+                        log(f"JAWAB #{n_sent + 1}: {name} -> {a!r}")
+                        ser.sendall(a.encode())
                     responded[pat] = n_sent + 1
                     n_sent += 1
             if "Rebooting" in buf and not saw_rebooting:
