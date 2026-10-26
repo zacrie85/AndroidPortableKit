@@ -34,6 +34,78 @@ def log(msg):
 # MODE parse-grub
 # ---------------------------------------------------------------------------
 
+def _7z_extract(seven, iso: Path, iso_path: str, outdir: Path) -> bool:
+    """Ekstrak satu file dari ISO (7z 'e' = rata, nama akhirnya dipakai)."""
+    r = subprocess.run([seven, "e", str(iso), f"-o{outdir}",
+                        iso_path.lstrip("/"), "-y"],
+                       capture_output=True, text=True)
+    name = Path(iso_path).name
+    return (outdir / name).exists()
+
+
+def _try_isolinux(outdir: Path) -> tuple[str, str, str] | None:
+    """Parse isolinux.cfg: cari label auto_install -> (kernel, initrd, append).
+    Contoh append: initrd=/initrd.img root=/dev/ram0 AUTO_INSTALL=0 DEBUG= noexec=off
+    """
+    cfg = outdir / "isolinux.cfg"
+    if not cfg.exists():
+        return None
+    text = cfg.read_text(encoding="utf-8", errors="replace")
+    labels = re.split(r"(?m)^(?=label\s)", text)
+    for block in labels:
+        if not re.match(r"label\s", block):
+            continue
+        m_label = re.search(r"label\s+(\S+)", block)
+        m_menu = re.search(r"menu label\s+(.+)", block)
+        name = (m_label.group(1) if m_label else "") + " " + \
+               (m_menu.group(1) if m_menu else "")
+        if "auto_install" not in name.lower() and "auto install" not in name.lower():
+            continue
+        m_kernel = re.search(r"^\s*kernel\s+(\S+)", block, re.M)
+        m_append = re.search(r"^\s*append\s+(.+)$", block, re.M)
+        if not m_kernel or not m_append:
+            continue
+        kernel = m_kernel.group(1)
+        append_full = " ".join(m_append.group(1).split())
+        # append berbentuk: initrd=/initrd.img root=/dev/ram0 AUTO_INSTALL=0 ...
+        m_initrd = re.search(r"(?:^|\s)initrd=(\S+)", append_full)
+        initrd = m_initrd.group(1) if m_initrd else "/initrd.img"
+        append = re.sub(r"(?:^|\s)initrd=\S+", "", append_full).strip()
+        log(f"isolinux.cfg: label '{name.strip()}'")
+        log(f"  kernel={kernel} initrd={initrd}")
+        log(f"  append={append}")
+        return kernel, initrd, append
+    return None
+
+
+def _try_grub_chain(outdir: Path) -> tuple[str, str, str] | None:
+    """Fallback: parse rantai grub.cfg -> source -> android.cfg (grub dinamis).
+    Cari add_entry "...Auto Install..." lalu gabungkan dengan template linux."""
+    combined = ""
+    for cand in ("grub.cfg", "android.cfg"):
+        f = outdir / cand
+        if f.exists():
+            combined += f.read_text(encoding="utf-8", errors="replace") + "\n"
+
+    m_add = re.search(
+        r'add_entry\s+"([^"]*[Aa]uto\s+[Ii]nstall[^"]*)"\s+(.+)', combined)
+    m_tpl = re.search(r"^\s*linux\s+(\S+)\s+(.+)$", combined, re.M)
+    m_initrd = re.search(r"^\s*initrd\s+(\S+)", combined, re.M)
+    if not (m_add and m_tpl and m_initrd):
+        return None
+    extra = " ".join(m_add.group(2).split())
+    kernel_tpl, args_tpl = m_tpl.group(1), m_tpl.group(2)
+    kernel = kernel_tpl.replace("$kd/", "/").replace("$kdir/", "/")
+    initrd = m_initrd.group(1).replace("$kd/", "/").replace("$kdir/", "/")
+    m_src = re.search(r"^\s*set\s+src=(\S+)\s*$", combined, re.M)
+    src = m_src.group(1) if m_src else ""
+    append = (args_tpl.replace("$src", src).replace("$@", extra))
+    append = " ".join(append.split())
+    log(f"grub chain: kernel={kernel} initrd={initrd}")
+    log(f"  append={append}")
+    return kernel, initrd, append
+
+
 def mode_parse_grub(a):
     iso = Path(a.iso)
     outdir = Path(a.outdir)
@@ -41,58 +113,30 @@ def mode_parse_grub(a):
     seven = a.sevenzip
     listing = subprocess.run([seven, "l", str(iso)], capture_output=True,
                              text=True).stdout
+    (outdir / "listing.txt").write_text(listing, encoding="utf-8",
+                                        errors="replace")
     cfgs = [l.split()[-1] for l in listing.splitlines()
-            if l.strip().endswith("grub.cfg")]
-    if not cfgs:
-        log("grub.cfg gak ketemu di ISO!")
-        (outdir / "listing.txt").write_text(listing, encoding="utf-8",
-                                            errors="replace")
-        return 1
-    cfg_path = sorted(cfgs, key=lambda p: (0 if "boot" in p.lower() else 1, len(p)))[0]
-    log(f"grub.cfg dipilih: {cfg_path}")
-    subprocess.run([seven, "e", str(iso), f"-o{outdir}", cfg_path, "-y"],
-                   capture_output=True, text=True)
-    cfg_file = outdir / Path(cfg_path).name
-    cfg = cfg_file.read_text(encoding="utf-8", errors="replace")
+            if l.strip().lower().endswith(".cfg")]
+    log(f"file cfg di ISO: {cfgs}")
+    for c in cfgs:
+        _7z_extract(seven, iso, c, outdir)
 
-    # cari menuentry yang mengandung "auto install"
-    blocks = re.split(r"(?=menuentry\s)", cfg)
-    target = None
-    for b in blocks:
-        if "auto install" in b.lower():
-            target = b
-            break
-    if not target:
-        log("Entry 'Auto Install' gak ketemu. Isi grub.cfg dicatet buat diagnosis.")
-        (outdir / "grub-dump.txt").write_text(cfg, encoding="utf-8",
-                                              errors="replace")
+    result = _try_isolinux(outdir) or _try_grub_chain(outdir)
+    if not result:
+        log("Gagal menentukan parameter boot Auto Install (semua parser gagal).")
         return 1
+    kernel_iso, initrd_iso, append = result
 
-    m_linux = re.search(r"^\s*linux\s+(\S+)\s+(.+)$", target, re.M)
-    m_initrd = re.search(r"^\s*initrd\s+(\S+)", target, re.M)
-    if not m_linux or not m_initrd:
-        (outdir / "grub-dump.txt").write_text(target, encoding="utf-8",
-                                              errors="replace")
-        return 1
-    kernel_path = m_linux.group(1).lstrip("/")
-    initrd_path = m_initrd.group(1).lstrip("/")
-    append = " ".join(m_linux.group(2).split())
-    log(f"kernel: /{kernel_path}")
-    log(f"initrd: /{initrd_path}")
-    log(f"append: {append}")
-
-    for iso_path, dest in ((kernel_path, "kernel.img"),
-                           (initrd_path, "initrd.img")):
-        r = subprocess.run([seven, "e", str(iso), f"-o{outdir}", iso_path, "-y"],
-                           capture_output=True, text=True)
-        if r.returncode != 0 or not (outdir / dest).exists():
-            # nama file asli beda dari dest -> copy
-            src = outdir / Path(iso_path).name
-            if src.exists():
-                (outdir / dest).write_bytes(src.read_bytes())
-            else:
-                log(f"gagal ekstrak {iso_path}: {r.stderr[:300]}")
-                return 1
+    for iso_path, dest in ((kernel_iso, "kernel.img"),
+                           (initrd_iso, "initrd.img")):
+        ok = _7z_extract(seven, iso, iso_path, outdir)
+        src_name = outdir / Path(iso_path).name
+        if ok and src_name.name != dest:
+            (outdir / dest).write_bytes(src_name.read_bytes())
+            src_name.unlink()
+        if not (outdir / dest).exists():
+            log(f"gagal ekstrak {iso_path}")
+            return 1
     (outdir / "append.txt").write_text(append, encoding="utf-8")
     ksz = (outdir / "kernel.img").stat().st_size
     isz = (outdir / "initrd.img").stat().st_size
@@ -100,6 +144,7 @@ def mode_parse_grub(a):
     if ksz < 1_000_000 or isz < 100_000:
         log("ukuran kernel/initrd ngaco, kemungkinan salah ekstrak")
         return 1
+    log(f"APPEND FINAL: {append}")
     return 0
 
 
