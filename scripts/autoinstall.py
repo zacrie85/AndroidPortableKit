@@ -207,7 +207,6 @@ def mode_run(a):
     append = append + " FORCE_FORMAT=ext4 console=tty0 console=ttyS0,115200"
     kernel = bootdir / "kernel.img"
     initrd = bootdir / "initrd.img"
-    serial_sock = outdir / "serial.sock"
 
     cmd = [
         qemu,
@@ -225,7 +224,7 @@ def mode_run(a):
         "-display", "none",
         "-no-reboot",
         "-net", "none",
-        "-serial", f"unix:{serial_sock.as_posix()},server,nowait",
+        "-serial", "tcp:127.0.0.1:5557,server,nowait",
         "-monitor", "tcp:127.0.0.1:4444,server,nowait",
         "-rtc", "base=localtime",
     ]
@@ -234,12 +233,11 @@ def mode_run(a):
     proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL,
                             stderr=subprocess.STDOUT)
 
-    # konek ke serial unix socket (QEMU server,nowait -> boleh telat)
+    # konek ke serial TCP socket (Windows Python gak punya AF_UNIX!)
     ser = None
     for _ in range(90):
         try:
-            ser = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-            ser.connect(str(serial_sock))
+            ser = socket.create_connection(("127.0.0.1", 5557), timeout=5)
             break
         except OSError:
             ser = None
