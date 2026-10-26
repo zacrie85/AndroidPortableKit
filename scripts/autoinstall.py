@@ -195,6 +195,9 @@ def mode_run(a):
     disk = Path(a.disk)
     iso = Path(a.iso)
     append = (bootdir / "append.txt").read_text(encoding="utf-8").strip()
+    # FORCE_FORMAT=ext4: kernel meneruskan parameter tak-dikenal sebagai env var
+    # -> installer auto-memilih ext4 tanpa dialog (set_answer_if_auto $FORCE_FORMAT)
+    append = append + " FORCE_FORMAT=ext4"
     kernel = bootdir / "kernel.img"
     initrd = bootdir / "initrd.img"
 
@@ -258,20 +261,25 @@ def mode_run(a):
 
     deadline = t0 + a.timeout * 60
 
-    # Jadwal tombol. Installer BlissOS/AOSP pakai DUA jenis dialog:
-    #   1. Prompt console y/n: "This will replace all operating-systems... (y/n)?"
-    #      -> HARUS ditekan 'y' dulu baru Enter (Enter kosong = batal!)
-    #   2. Dialog menu (newt): pilih disk (sda), filesystem (ext4), dll.
-    #      -> cukup Enter (pilihan default udah benar), tekan 'y' gak ngaruh
-    # Karena itu fase awal pakai pola 'y'+Enter berkala, lanjutan Enter saja.
-    events = [(50, "y"), (52, "ret"),
-              (75, "y"), (77, "ret"),
-              (100, "y"), (102, "ret"),
-              (130, "y"), (132, "ret"),
-              (160, "ret"), (190, "ret"), (220, "ret"), (250, "ret"),
-              (280, "ret"), (310, "ret")]
+    # Jadwal tombol berdasarkan REVERSE-ENGINEERING script installer BlissOS
+    # (scripts/1-install dari install.img + init dari initrd.img):
+    #   D1 ~t=40-60  : prompt console "...(y/n)?"  -> JAWABAN HARUS BUKAN 'y'
+    #                  (logikanya kebalik: y = Live Mode! n/kosong = install)
+    #   D2 ~t=75-110 : dialog "last confirmation" --defaultno --yesno
+    #                  -> 'left' (pindah ke Yes) lalu 'ret'. Enter doang = No = REBOOT!
+    #   D3 ~t=110-140: menu partisi (auto-answered via adialog) / inputbox nama drive
+    #                  -> 'ret' terima default
+    #   selanjutnya  : 'ret' berkala (inputbox/yesno aman)
+    #   t>=600       : 'down'+'ret' tiap 90 dtk -> menu akhir "Congratulations"
+    #                  pilih item 2 "Reboot" -> reboot -f -> QEMU keluar (-no-reboot)
+    #                  (di yesno: down tak berfungsi + ret = Yes; di inputbox: ret = default)
+    events = [(50, "n"), (52, "ret"),
+              (95, "left"), (97, "ret"),
+              (110, "left"), (112, "ret"),
+              (130, "ret"), (160, "ret"), (190, "ret"),
+              (220, "ret"), (250, "ret"), (280, "ret"), (310, "ret")]
     ei = 0
-    next_periodic = t0 + 370          # setelah jadwal habis: Enter tiap 60 dtk
+    next_periodic = t0 + 600          # fase akhir: down+ret tiap 90 dtk
     next_dump = t0 + 40
     exited = False
 
@@ -296,12 +304,14 @@ def mode_run(a):
             try_send(k)
             ei += 1
         elif ei >= len(events) and time.time() >= next_periodic:
-            log("Kirim 'ret' (periodik)")
+            log("Kirim 'down'+'ret' (fase akhir: menu akhir -> Reboot)")
+            try_send("down")
+            time.sleep(0.4)
             try_send("ret")
-            next_periodic = time.time() + 60
+            next_periodic = time.time() + 90
         if time.time() >= next_dump:
             screendump()
-            next_dump = time.time() + (60 if dump_count[0] < 7 else 120)
+            next_dump = time.time() + (30 if dump_count[0] < 12 else 90)
         time.sleep(3)
 
     if not exited:
