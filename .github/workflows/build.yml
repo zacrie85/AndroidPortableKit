@@ -102,148 +102,51 @@ jobs:
           files: Runtime-QEMU-ADB.zip
 
   # ------------------------------------------------------------
-  # JOB 3: pre-install Android ke disk virtual (otomatis penuh)
-  #         kalau gagal -> fallback: lampirkan ISO terpecah 2
+  # JOB 3: bundel ISO Android (terpecah < 1.2 GB per bagian)
+  #         -> mode offline: install sekali klik di VM, tanpa internet
   # ------------------------------------------------------------
-  android:
+  iso:
     needs: runtime
     runs-on: windows-latest
-    timeout-minutes: 300
+    timeout-minutes: 60
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Pasang Python + Pillow
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - name: Pasang dependensi
-        run: |
-          python -m pip install --upgrade pillow
-          choco install 7zip -y
-
-      - name: Pasang QEMU (silent)
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-          curl.exe -L --retry 5 -o "$env:RUNNER_TEMP\qemu-setup.exe" https://qemu.weilnetz.de/w64/qemu-w64-setup-20260811.exe
-          Start-Process "$env:RUNNER_TEMP\qemu-setup.exe" -ArgumentList "/S","/D=C:\qemu_portable" -Wait
-          if (-not (Test-Path "C:\qemu_portable\qemu-system-x86_64.exe")) { throw "QEMU gak terpasang" }
-
       - name: Download ISO BlissOS 16 GApps
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          New-Item -ItemType Directory -Force -Path "C:\aw" | Out-Null
-          curl.exe -L --retry 5 -o "C:\aw\bliss.iso" "https://downloads.sourceforge.net/project/blissos-x86/Official/BlissOS16/Gapps/Generic/Bliss-v16.9.7-x86_64-OFFICIAL-gapps-20241011.iso"
-          $iso = Get-Item "C:\aw\bliss.iso"
+          New-Item -ItemType Directory -Force -Path "C:\\aw" | Out-Null
+          curl.exe -L --retry 5 -o "C:\\aw\\bliss.iso" "https://downloads.sourceforge.net/project/blissos-x86/Official/BlissOS16/Gapps/Generic/Bliss-v16.9.7-x86_64-OFFICIAL-gapps-20241011.iso"
+          $iso = Get-Item "C:\\aw\\bliss.iso"
           if ($iso.Length -lt 1GB) { throw "ISO kurang lengkap" }
           Write-Host ("ISO: " + [math]::Round($iso.Length/1GB,2) + " GB")
 
-      - name: Ekstrak kernel/initrd + parse parameter boot Auto-Install
-        shell: pwsh
-        run: |
-          python scripts/autoinstall.py parse-grub --iso "C:\aw\bliss.iso" --sevenzip "C:\Program Files\7-Zip\7z.exe" --outdir "C:\aw\boot"
-          Get-Content "C:\aw\boot\append.txt"
-
-      - name: Bikin disk virtual 40 GB
-        shell: pwsh
-        run: |
-          & "C:\qemu_portable\qemu-img.exe" create -f qcow2 "C:\aw\base.qcow2" 40G
-          Get-Item "C:\aw\base.qcow2" | Select-Object Name,Length
-
-      - name: Jalankan auto-install Android (30-90 menit)
-        shell: pwsh
-        run: |
-          python scripts/autoinstall.py run `
-            --qemu "C:\qemu_portable\qemu-system-x86_64.exe" `
-            --qemu-img "C:\qemu_portable\qemu-img.exe" `
-            --disk "C:\aw\base.qcow2" --iso "C:\aw\bliss.iso" `
-            --bootdir "C:\aw\boot" --outdir "C:\aw\logs" --timeout 240
-
-      - name: Kompres & pecah disk jadi bagian < 1.5 GB
-        id: pack
+      - name: Pecah ISO jadi bagian < 1.2 GB
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          if (Test-Path "C:\aw\logs\status.json") {
-            $st = Get-Content "C:\aw\logs\status.json" | ConvertFrom-Json
-            Write-Host ("status.json: " + ($st | ConvertTo-Json -Compress))
-            if (-not $st.ok) { throw "auto-install dilaporkan belum sukses oleh status.json" }
-          } else {
-            throw "status.json gak ada - auto-install gagal total"
-          }
-          & "C:\qemu_portable\qemu-img.exe" convert -c -O qcow2 "C:\aw\base.qcow2" "C:\aw\base-c.qcow2"
-          $sz = (Get-Item "C:\aw\base-c.qcow2").Length
-          Write-Host ("Disk terkompres: " + [math]::Round($sz/1GB,2) + " GB")
-          if ($sz -lt 400MB) { throw "Disk hasil install kecil sekali - kemungkinan gagal" }
-          $chunk = 1500MB
-          $buf = New-Object byte[] (64MB)
-          $i = 1
-          $in = [IO.File]::OpenRead("C:\aw\base-c.qcow2")
-          try {
-            while (($read = $in.Read($buf, 0, $buf.Length)) -gt 0) {
-              $name = "android-base.qcow2.part{0:D2}" -f $i
-              $out = [IO.File]::OpenWrite($name)
-              try { $out.Write($buf, 0, $read) } finally { $out.Close() }
-              $i++
-            }
-          } finally { $in.Close() }
-          $hash = Get-ChildItem "android-base.qcow2.part*" | ForEach-Object {
-            "$((Get-FileHash $_.FullName -Algorithm SHA256).Hash)  $($_.Name)"
-          }
-          $hash | Set-Content "SHA256SUMS.txt" -Encoding ASCII
-          Get-ChildItem "android-base.qcow2.part*","SHA256SUMS.txt" | Format-Table Name,Length
-          "parts" | Set-Content "C:\aw\mode.txt"
-
-      - name: Lampirkan disk Android (hasil pre-install) ke Release
-        if: steps.pack.outcome == 'success'
-        uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            android-base.qcow2.part*
-            SHA256SUMS.txt
-
-      - name: FALLBACK - kalau pre-install gagal, pecah ISO-nya saja
-        if: failure()
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-          Write-Host "Pre-install gagal -> pakai mode ISO (install manual sekali klik)"
           $chunk = 1200MB
           $buf = New-Object byte[] (64MB)
-          $i = 1
-          $in = [IO.File]::OpenRead("C:\aw\bliss.iso")
+          $i = 1; $written = 0; $out = $null
+          $in = [IO.File]::OpenRead("C:\\aw\\bliss.iso")
           try {
             while (($read = $in.Read($buf, 0, $buf.Length)) -gt 0) {
-              $name = "BlissOS16-GApps.iso.part{0:D2}" -f $i
-              $out = [IO.File]::OpenWrite($name)
-              try { $out.Write($buf, 0, $read) } finally { $out.Close() }
-              $i++
+              if ($null -eq $out -or $written -ge $chunk) {
+                if ($null -ne $out) { $out.Close() }
+                $name = "BlissOS16-GApps.iso.part{0:D2}" -f $i
+                $out = [IO.File]::OpenWrite($name); $written = 0; $i++
+              }
+              $out.Write($buf, 0, $read); $written += $read
             }
-          } finally { $in.Close() }
+          } finally { if ($out) { $out.Close() }; $in.Close() }
           $hash = Get-ChildItem "BlissOS16-GApps.iso.part*" | ForEach-Object {
             "$((Get-FileHash $_.FullName -Algorithm SHA256).Hash)  $($_.Name)"
           }
           $hash | Set-Content "SHA256SUMS.txt" -Encoding ASCII
           Get-ChildItem "BlissOS16-GApps.iso.part*","SHA256SUMS.txt" | Format-Table Name,Length
 
-      - name: Lampirkan ISO (mode fallback) ke Release
-        if: failure()
+      - name: Lampirkan ISO ke Release
         uses: softprops/action-gh-release@v2
         with:
           files: |
             BlissOS16-GApps.iso.part*
             SHA256SUMS.txt
-
-      - name: Upload log & screendump (buat diagnosis)
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: autoinstall-logs
-          path: |
-            C:\aw\logs\**
-            C:\aw\boot\grub-dump.txt
-          if-no-files-found: ignore
-          retention-days: 7

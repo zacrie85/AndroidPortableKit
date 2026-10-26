@@ -17,7 +17,7 @@ CARA PALING GAMPANG - MODE OFFLINE (GAK BUTUH INTERNET)
     Download SEMUA file yang ada di rilis terbaru:
       - AndroidPortableKit.zip        (program utama)
       - Runtime-QEMU-ADB.zip          (mesin virtual + ADB)
-      - android-base.qcow2.part01, part02, dst  (sistem Android)
+      - BlissOS16-GApps.iso.part01, part02, dst (ISO Android + Play Store)
     Taruh SEMUA file di SATU folder yang sama.
 
 [2] Klik dua kali AndroidPortableKit.zip -> Extract All
@@ -29,9 +29,9 @@ CARA PALING GAMPANG - MODE OFFLINE (GAK BUTUH INTERNET)
 
 [4] Jalankan: 1-Siapkan-Offline.bat
     -> merakit semuanya jadi satu. GAK BUTUH INTERNET.
-    (kalau yang kamu download adalah BlissOS16-GApps.iso.part...,
-     bat ini tetap merakit, lalu minta jalankan 1-Setup-Awal.bat
-     sekali buat install - tetap tanpa internet)
+    (file ISO terpecah tadi digabung otomatis, lalu kamu diminta
+     jalanin 1-Setup-Awal.bat SEKALI buat install Android ke disk
+     virtual - tinggal pilih 'Auto Install', TETAP TANPA INTERNET)
 
 [5] Jalankan: 2-Buka-Launcher.bat
     -> Klik "JALANKAN ANDROID"

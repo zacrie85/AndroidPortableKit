@@ -13,7 +13,7 @@ Ambil dari halaman **[Releases](https://github.com/zacrie85/AndroidPortableKit/r
 |------|----------|
 | `AndroidPortableKit.zip` | **Program utama** (exe launcher + setup + panduan) |
 | `Runtime-QEMU-ADB.zip` | Mesin virtual QEMU + ADB (buat mode offline) |
-| `android-base.qcow2.part01`, `part02`, ... | Sistem Android **sudah terpasang**, tinggal digabung (mode offline) |
+| `BlissOS16-GApps.iso.part01`, `part02`, ... | ISO Android 13 + Play Store (mode offline, install sekali klik di VM) |
 | `AndroidPortable.exe` | Launcher saja (untuk update manual / pemakai lanjutan) |
 
 > Mode offline: download SEMUA file ke satu folder, extract `AndroidPortableKit.zip`,
