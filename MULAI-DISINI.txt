@@ -1,7 +1,8 @@
 =========================================================
-   MULAI DISINI - ANDROID PORTABLE KIT v1.1
-   Nonton & upload video TikTok / Instagram / SnackVideo /
-   YouTube langsung dari Windows, tanpa install apapun
+   MULAI DISINI - ANDROID PORTABLE KIT v1.2
+   TikTok / Instagram / SnackVideo / YouTube di Windows,
+   TANPA install apapun - Android-nya UDAH TERINSTALL
+   duluan, tinggal pakai!
 =========================================================
 
 KEBUTUHAN:
@@ -10,55 +11,70 @@ KEBUTUHAN:
 - Ruang disk kosong minimal 12 GB
 
 =========================================================
-CARA PALING GAMPANG - MODE OFFLINE (GAK BUTUH INTERNET)
+MODE SIAP-PAKAI (PALING GAMPANG - TANPA INSTALL)
 =========================================================
 
 [1] Buka halaman Releases repo ini di GitHub.
-    Download SEMUA file yang ada di rilis terbaru:
-      - AndroidPortableKit.zip        (program utama)
-      - Runtime-QEMU-ADB.zip          (mesin virtual + ADB)
-      - BlissOS16-GApps.iso.part01, part02, dst (ISO Android + Play Store)
-    Taruh SEMUA file di SATU folder yang sama.
+    Download file-file ini dari rilis terbaru, taruh SEMUA
+    di SATU folder yang sama:
+      - AndroidPortableKit.zip              (program utama)
+      - Runtime-QEMU-ADB.zip                (mesin virtual)
+      - android-base.qcow2.part01 s/d partNN (Android-nya,
+        SUDAH TERINSTALL - gak perlu install apapun lagi!)
+    Catatan: file BlissOS16-GApps.iso.part* GAK PERLU
+    di-download (itu alternatif lama buat install manual).
 
-[2] Klik dua kali AndroidPortableKit.zip -> Extract All
-    (atau klik kanan -> Extract). Hasil extract jadi folder kit.
+[2] Klik kanan AndroidPortableKit.zip -> Extract All
+    (atau klik kanan -> Extract). Hasil extract jadi folder
+    kit, misal: C:\AndroidPortable
 
 [3] PINDAHKAN file-file ini ke DALAM folder hasil extract:
       Runtime-QEMU-ADB.zip
       android-base.qcow2.part01, part02, dst.
 
 [4] Jalankan: 1-Siapkan-Offline.bat
-    -> merakit semuanya jadi satu. GAK BUTUH INTERNET.
-    (file ISO terpecah tadi digabung otomatis, lalu kamu diminta
-     jalanin 1-Setup-Awal.bat SEKALI buat install Android ke disk
-     virtual - tinggal pilih 'Auto Install', TETAP TANPA INTERNET)
+    -> semua file digabung otomatis (2-5 menit, GAK BUTUH
+       INTERNET). Selesai. GAK ADA INSTALL LANGKAH APAPUN.
 
-[5] Jalankan: 2-Buka-Launcher.bat
-    -> Klik "JALANKAN ANDROID"
+[5] Jalankan AndroidPortable.exe -> klik "JALANKAN ANDROID"
+    -> tunggu masuk layar Android. Booting pertama bisa
+    5-15 menit kalau log bilang mode TCG - itu normal,
+    biarin aja sampai muncul layar Android.
 
-[6] Di dalam Android: login akun Google, buka Play Store,
-    install TikTok, Instagram, SnackVideo, YouTube.
+[6] Di dalam Android: login akun Google -> buka Play Store
+    -> install TikTok / Instagram / SnackVideo / YouTube.
 
 [7] UPLOAD VIDEO:
     - Klik "KIRIM VIDEO DARI PC" -> pilih video kamu
     - Video muncul di galeri Android
-    - Buka TikTok/IG/SnackVideo/YT -> tombol (+) -> pilih video
-      -> tulis caption/judul -> POST!
+    - Buka TikTok/IG/SnackVideo/YT -> tombol (+) -> pilih
+      video -> tulis caption/judul -> POST!
 
 [8] MULTI-AKUN (CLONE):
     - Klik "+ Profile Baru" (misal: Akun-2)
-    - Jalankan barengan beberapa profile, tiap profile akun terpisah
+    - Jalankan barengan beberapa profile, tiap profile
+      akun terpisah
 
 =========================================================
-ALTERNATIF - MODE ONLINE (kalau gak mau download file gede)
+ALTERNATIF - MODE ISO (install manual di jendela VM)
 =========================================================
-[1] Extract AndroidPortableKit.zip ke path tanpa spasi, mis. C:\AndroidPortable
-[2] Jalankan 1-Setup-Awal.bat (download otomatis ~2.6 GB dari internet)
-[3] Ikuti petunjuk install di jendela yang muncul
-[4] Lanjut langkah 5-8 di atas.
+Dipakai HANYA kalau file android-base.qcow2.part* gak ada
+di halaman Release:
+
+[1] Download kit zip + runtime zip + SEMUA file
+    BlissOS16-GApps.iso.part01 s/d partNN.
+[2] Extract kit zip, pindahkan semua file itu ke dalamnya.
+[3] Jalankan 1-Siapkan-Offline.bat (menggabung ISO).
+[4] Jalankan 1-Setup-Awal.bat -> di jendela yang muncul:
+    pilih 'Auto Install to specified harddisk' -> sda ->
+    ext4 -> YES -> TUNGGU sampai 'Installation is complete'
+    -> Reboot.
+[5] Lanjut langkah 5-8 di atas.
 
 TIPS PENTING:
-- Ekstrak ke path TANPA SPASI (contoh: C:\AndroidPortable) biar mulus
-- Biar kenceng: aktifkan "Windows Hypervisor Platform" di Windows Features
-- Bebasin mouse dari jendela Android: Ctrl+Alt+G
+- Taruh folder di path TANPA SPASI (contoh: C:\AndroidPortable)
+- Biar kenceng 10x: aktifkan "Windows Hypervisor Platform"
+  di Windows Features. Versi 1.1.8+ otomatis pindah ke mode
+  TCG (lebih lambat tapi pasti jalan) kalau belum aktif.
+- Keluarin mouse dari jendela Android: Ctrl+Alt+G
 - Detail lengkap + troubleshooting: PANDUAN-LENGKAP.txt

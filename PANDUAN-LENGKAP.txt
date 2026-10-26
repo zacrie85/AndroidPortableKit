@@ -182,6 +182,14 @@ BAGIAN 6 - TROUBLESHOOTING
        (Windows Features) + Virtualization Enabled di BIOS, lalu
        balikin "accel" ke "auto".
 
+[Q] Bedanya file android-base.qcow2.part* dengan BlissOS16-GApps.iso.part*?
+    -> android-base.qcow2.part* = Android SUDAH TERINSTALL di dalamnya.
+       Pilih yang ini! Tinggal digabung lewat 1-Siapkan-Offline.bat,
+       GAK PERLU install manual sama sekali (mode siap-pakai).
+    -> BlissOS16-GApps.iso.part* = installer mentah. Harus di-install
+       manual lewat 1-Setup-Awal.bat (Auto Install > sda > ext4 > YES).
+       Pakai cuma kalau file android-base gak tersedia.
+
 [Q] Jendela Android kebuka tapi isinya hitam terus ada tulisan
     "No bootable device" / "Boot failed: not a bootable disk".
     -> Artinya: disk virtual-nya KOSONG - Android belum ke-install

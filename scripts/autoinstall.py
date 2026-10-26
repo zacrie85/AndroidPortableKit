@@ -186,6 +186,25 @@ class Monitor:
         return text
 
 
+def _whpx_works(qemu: str) -> bool:
+    """Tes WHPX beneran aktif di Windows (bukan cuma ada di build QEMU).
+    Boot -machine none -S selama 2.5 detik: kalau masih hidup = WHPX oke."""
+    if os.name != "nt":
+        return False
+    try:
+        proc = subprocess.Popen(
+            [qemu, "-accel", "whpx", "-machine", "none", "-S", "-display", "none"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            creationflags=subprocess.CREATE_NO_WINDOW)
+        time.sleep(2.5)
+        alive = proc.poll() is None
+        if alive:
+            proc.kill()
+        return alive
+    except Exception:
+        return False
+
+
 def mode_run(a):
     """Serial-console automation (expect-style).
 
@@ -208,11 +227,19 @@ def mode_run(a):
     kernel = bootdir / "kernel.img"
     initrd = bootdir / "initrd.img"
 
+    # pilih akselerasi: whpx kalau beneran aktif (kencang), kalau gak -> tcg
+    accel_arg = ["-accel", "tcg,thread=multi"]
+    cpu_arg = "max"
+    if a.accel == "whpx" or (a.accel == "auto" and _whpx_works(qemu)):
+        accel_arg = ["-accel", "whpx"]
+        cpu_arg = "host"
+    log(f"akselerasi: {accel_arg[1]} (cpu {cpu_arg})")
+
     cmd = [
         qemu,
         "-machine", "pc",
-        "-accel", "tcg,thread=multi",
-        "-cpu", "max",
+        accel_arg[0], accel_arg[1],
+        "-cpu", cpu_arg,
         "-smp", "4",
         "-m", "2048",
         "-kernel", str(kernel),
@@ -398,6 +425,7 @@ def main():
     rn.add_argument("--bootdir", required=True)
     rn.add_argument("--outdir", required=True)
     rn.add_argument("--timeout", type=int, default=110, help="menit")
+    rn.add_argument("--accel", choices=["auto", "whpx", "tcg"], default="auto")
 
     a = p.parse_args()
     if a.mode == "parse-grub":

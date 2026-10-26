@@ -262,17 +262,37 @@ if ($needInstall) {
     & $QemuImg create -f qcow2 $BaseDisk 40G
     if (-not (Test-Path $BaseDisk)) { Write-Err2 "Gagal bikin disk"; Read-Host "ENTER"; exit 1 }
 
-    # deteksi akselerasi
-    $accelOut = & $QemuExe -accel help 2>&1 | Out-String
-    $hasWhpx = $accelOut -match "whpx"
-    $accelArgs = @("-accel", "tcg,thread=multi"); $cpuArg = "max"
-    if ($hasWhpx) { $accelArgs = @("-accel", "whpx"); $cpuArg = "host" }
-    if (-not $hasWhpx) {
-        Write-Warn2 "WHPX (Windows Hypervisor Platform) belum aktif -> install & jalan bakal LAMBAT."
-        Write-Warn2 "Sangat disarankan: Start Menu > ketik 'Turn Windows features on or off'"
-        Write-Warn2 "> centang 'Windows Hypervisor Platform' > restart PC > jalankan setup lagi."
-        $lanjut = Read-Host "Tetap lanjut tanpa WHPX? (y/n) [y]"
-        if ($lanjut -eq "n") { exit 1 }
+    # deteksi akselerasi - WHPX harus di-tes BENERAN (build QEMU bisa
+    # dukung whpx padahal Windows belum aktif -> QEMU langsung mati,
+    # install gak jalan). Sekalian hormati pilihan di config.json.
+    $accelChoice = "auto"
+    try {
+        if (Test-Path $ConfigFile) {
+            $cj = Get-Content $ConfigFile -Raw | ConvertFrom-Json
+            if ($cj.accel) { $accelChoice = [string]$cj.accel }
+        }
+    } catch {}
+    $whpxOk = $false
+    if ($accelChoice -in @("auto","whpx")) {
+        Write-Info "Ngetes WHPX (virtualisasi Windows) 3 detik..."
+        $probe = Start-Process -FilePath $QemuExe -ArgumentList @("-accel","whpx","-machine","none","-S","-display","none") -PassThru -WindowStyle Hidden
+        Start-Sleep -Seconds 3
+        $whpxOk = (-not $probe.HasExited)
+        if ($whpxOk) { Stop-Process -Id $probe.Id -Force -ErrorAction SilentlyContinue }
+    }
+    if ($accelChoice -eq "whpx" -and -not $whpxOk) {
+        Write-Warn2 "Config minta WHPX tapi WHPX gak aktif -> pakai TCG."
+        $accelChoice = "tcg"
+    } elseif ($accelChoice -eq "auto") {
+        if ($whpxOk) { $accelChoice = "whpx" } else { $accelChoice = "tcg" }
+    }
+    if ($accelChoice -eq "whpx") {
+        $accelArgs = @("-accel", "whpx"); $cpuArg = "host"
+        Write-Ok "Akselerasi install: WHPX (kencang)"
+    } else {
+        $accelArgs = @("-accel", "tcg,thread=multi"); $cpuArg = "max"
+        Write-Warn2 "Akselerasi install: TCG (lambat, tapi pasti jalan di PC apapun)."
+        Write-Warn2 "Biar kenceng: Start Menu > 'Turn Windows features on or off' > centang 'Windows Hypervisor Platform' > restart."
     }
 
     Write-Info "Membuka mesin virtual buat install Android..."
