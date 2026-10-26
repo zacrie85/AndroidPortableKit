@@ -237,7 +237,11 @@ def mode_run(a):
     def screendump():
         dump_count[0] += 1
         ppm = dump_dir / f"tmp.ppm"
-        mon.send(f"screendump {ppm.as_posix()}")
+        try:
+            mon.send(f"screendump {ppm.as_posix()}")
+        except Exception as e:
+            log(f"screendump gagal: {e}")
+            return
         time.sleep(1.5)
         if ppm.exists() and ppm.stat().st_size > 1000:
             png = dump_dir / f"stage-{dump_count[0]:03d}.png"
@@ -253,10 +257,31 @@ def mode_run(a):
                 ppm.unlink()
 
     deadline = t0 + a.timeout * 60
-    next_enter = t0 + 60
-    fast_enters_until = t0 + 330     # jendela dialog: Enter tiap 25 detik
-    next_dump = t0 + 45
+
+    # Jadwal tombol. Installer BlissOS/AOSP pakai DUA jenis dialog:
+    #   1. Prompt console y/n: "This will replace all operating-systems... (y/n)?"
+    #      -> HARUS ditekan 'y' dulu baru Enter (Enter kosong = batal!)
+    #   2. Dialog menu (newt): pilih disk (sda), filesystem (ext4), dll.
+    #      -> cukup Enter (pilihan default udah benar), tekan 'y' gak ngaruh
+    # Karena itu fase awal pakai pola 'y'+Enter berkala, lanjutan Enter saja.
+    events = [(50, "y"), (52, "ret"),
+              (75, "y"), (77, "ret"),
+              (100, "y"), (102, "ret"),
+              (130, "y"), (132, "ret"),
+              (160, "ret"), (190, "ret"), (220, "ret"), (250, "ret"),
+              (280, "ret"), (310, "ret")]
+    ei = 0
+    next_periodic = t0 + 370          # setelah jadwal habis: Enter tiap 60 dtk
+    next_dump = t0 + 40
     exited = False
+
+    def try_send(k):
+        try:
+            mon.send(f"sendkey {k}")
+            return True
+        except Exception as e:
+            log(f"monitor gak bisa kirim '{k}': {e}")
+            return False
 
     while time.time() < deadline:
         if proc.poll() is not None:
@@ -264,15 +289,20 @@ def mode_run(a):
             log(f"QEMU keluar sendiri (elapsed {int(time.time()-t0)}s) - "
                 f"installer kelihatannya selesai.")
             break
-        now = time.time()
-        if now >= next_enter:
-            log("Kirim Enter...")
-            mon.send("sendkey ret")
-            next_enter = now + (25 if now < fast_enters_until else 60)
-        if now >= next_dump:
+        elapsed = time.time() - t0
+        if ei < len(events) and elapsed >= events[ei][0]:
+            k = events[ei][1]
+            log(f"Kirim '{k}' (jadwal #{ei+1}, t={int(elapsed)}s)")
+            try_send(k)
+            ei += 1
+        elif ei >= len(events) and time.time() >= next_periodic:
+            log("Kirim 'ret' (periodik)")
+            try_send("ret")
+            next_periodic = time.time() + 60
+        if time.time() >= next_dump:
             screendump()
-            next_dump = now + 120
-        time.sleep(4)
+            next_dump = time.time() + (60 if dump_count[0] < 7 else 120)
+        time.sleep(3)
 
     if not exited:
         log(f"Timeout {a.timeout} menit - matiin VM paksa.")
@@ -296,7 +326,10 @@ def mode_run(a):
     status["ok"] = ok
     (outdir / "status.json").write_text(json.dumps(status, indent=2))
     log("STATUS: " + json.dumps(status))
-    screendump()  # frame terakhir buat diagnosis
+    try:
+        screendump()  # frame terakhir buat diagnosis
+    except Exception:
+        pass
     return 0 if ok else 1
 
 
