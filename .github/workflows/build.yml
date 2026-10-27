@@ -149,7 +149,7 @@ jobs:
           Write-Host "disk OK"
 
       - name: INSTALL OTOMATIS Android ke disk (headless, bisa 1-2 jam)
-        run: python scripts/autoinstall.py run --qemu "C:\qemu_portable\qemu-system-x86_64.exe" --qemu-img "C:\qemu_portable\qemu-img.exe" --disk "C:\aw\base-system.qcow2" --iso "C:\aw\bliss.iso" --bootdir "C:\aw\boot" --outdir "C:\aw\out" --timeout 150
+        run: python scripts/autoinstall.py run --qemu "C:\qemu_portable\qemu-system-x86_64.exe" --qemu-img "C:\qemu_portable\qemu-img.exe" --disk "C:\aw\base-system.qcow2" --iso "C:\aw\bliss.iso" --bootdir "C:\aw\boot" --outdir "C:\aw\out" --timeout 150 --mem 3072
 
       - name: Simpan log serial + screenshot (buat analisa kalau gagal)
         if: always()

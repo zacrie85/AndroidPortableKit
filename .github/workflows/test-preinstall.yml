@@ -49,7 +49,7 @@ jobs:
           Write-Host "disk OK"
 
       - name: INSTALL OTOMATIS Android ke disk (tes headless)
-        run: python scripts/autoinstall.py run --qemu "C:\qemu_portable\qemu-system-x86_64.exe" --qemu-img "C:\qemu_portable\qemu-img.exe" --disk "C:\aw\base-system.qcow2" --iso "C:\aw\bliss.iso" --bootdir "C:\aw\boot" --outdir "C:\aw\out" --timeout 110
+        run: python scripts/autoinstall.py run --qemu "C:\qemu_portable\qemu-system-x86_64.exe" --qemu-img "C:\qemu_portable\qemu-img.exe" --disk "C:\aw\base-system.qcow2" --iso "C:\aw\bliss.iso" --bootdir "C:\aw\boot" --outdir "C:\aw\out" --timeout 110 --mem 3072
 
       - name: Simpan log serial + status + screenshot
         if: always()

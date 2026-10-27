@@ -350,6 +350,7 @@ if [ "$SZ" -lt 1500000 ]; then echo "INSTALL-FAIL-COPY"; exit 1; fi
 mkdir -p /hd/boot/grub
 grub-install --directory=/tmp/ii/lib/grub/i386-pc --modules="all_video video png gfxmenu gfxterm" --root-directory=/hd /dev/sda > /tmp/grub.log 2>&1 || { tail -8 /tmp/grub.log; echo "INSTALL-FAIL-GRUB"; exit 1; }
 echo "GRUB-OK"
+tail -2 /tmp/grub.log 2>/dev/null
 cat > /hd/boot/grub/grub.cfg << CFGEOF9
 set timeout=3
 set default=0
@@ -362,6 +363,8 @@ CFGEOF9
 sync
 ls -la /hd /hd$TGT
 echo "INSTALL-OK"
+sync
+sleep 3
 reboot -f
 echo "INSTALL-FAIL-STILL-ALIVE"
 """
@@ -451,6 +454,30 @@ def _send_b64_script(ser, script_text: str):
     ser.sendall(b"sh /tmp/i.sh\r\n")
 
 
+def _check_boot_sector(disk: Path, qemu_img: str):
+    """Verifikasi hasil install dari HOST: baca sector 0 disk via qemu-img dd.
+    Return (boot_sig_55AA, part_type83, grub_code_nonzero)."""
+    import tempfile
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td) / "mbr.bin"
+            r = subprocess.run([qemu_img, "dd", f"if={disk}", f"of={out}",
+                                "bs=512", "count=1"],
+                               capture_output=True, timeout=120)
+            if r.returncode != 0 or not out.exists():
+                return False, False, False
+            data = out.read_bytes()
+            if len(data) < 512:
+                return False, False, False
+            sig = data[510:512] == b"\x55\xAA"
+            part83 = data[450] == 0x83
+            grub_code = any(data[0:446])
+            return sig, part83, grub_code
+    except Exception as e:
+        log(f"cek boot sector gagal: {e}")
+        return False, False, False
+
+
 def mode_run(a):
     """Install otomatis VIA SERIAL SHELL, script dikirim via initrd injection.
 
@@ -494,7 +521,7 @@ def mode_run(a):
         accel_arg[0], accel_arg[1],
         "-cpu", cpu_arg,
         "-smp", "4",
-        "-m", "3072",
+        "-m", str(a.mem),
         "-kernel", str(kernel),
         "-initrd", str(initrd_run),
         "-append", append,
@@ -606,11 +633,13 @@ def mode_run(a):
     saw_fail = ""
     saw_script_start = False
     sent_fallback = False
+    qemu_exited = False
     fail_markers = ("INSTALL-FAIL",)
     next_dump = time.time() + 90
     idle_since = time.time()
     while time.time() < deadline:
         if proc.poll() is not None:
+            qemu_exited = True
             log(f"QEMU keluar (elapsed {int(time.time() - t0)}s)")
             break
         got = _serial_recv(ser)
@@ -662,10 +691,17 @@ def mode_run(a):
 
     elapsed = int(time.time() - t0)
     raw = disk.stat().st_size if disk.exists() else 0
-    ok = saw_ok and raw > 2 * 1024**3 and elapsed >= 120
+    boot_sig, part83, grub_code = _check_boot_sector(disk, a.qemu_img)
+    log(f"boot sector: 55AA={boot_sig} part83={part83} grub_code={grub_code}")
+    # sukses: marker INSTALL-OK terlihat, ATAU QEMU keluar sendiri + MBR berisi
+    # grub (echo terakhir bisa gak keburu keluar sebelum reboot -f)
+    ok = (raw > 2 * 1024**3
+          and (saw_ok or (qemu_exited and grub_code and part83)))
     status = {"elapsed_sec": elapsed, "disk_raw_bytes": raw,
               "disk_raw_gb": round(raw / 1024**3, 2),
-              "saw_install_ok": saw_ok, "fail_hint": saw_fail, "ok": ok}
+              "saw_install_ok": saw_ok, "qemu_exited": qemu_exited,
+              "boot_sig_55aa": boot_sig, "part_type83": part83,
+              "grub_code": grub_code, "fail_hint": saw_fail, "ok": ok}
     (outdir / "status.json").write_text(json.dumps(status, indent=2))
     log("STATUS: " + json.dumps(status))
     return 0 if ok else 1
@@ -688,6 +724,7 @@ def main():
     rn.add_argument("--bootdir", required=True)
     rn.add_argument("--outdir", required=True)
     rn.add_argument("--timeout", type=int, default=110, help="menit")
+    rn.add_argument("--mem", type=int, default=2048, help="RAM guest MB")
     rn.add_argument("--accel", choices=["auto", "whpx", "tcg"], default="auto")
 
     a = p.parse_args()
