@@ -242,6 +242,7 @@ if [ ! -x /tmp/ii/sbin/grub-install ]; then
   zcat /mnt/install.img | ( cd /tmp/ii && /bin/busybox cpio -idu > /dev/null 2>&1 ) \
     || zcat /src/install.img | ( cd /tmp/ii && /bin/busybox cpio -idu > /dev/null 2>&1 ) \
     || echo "TOOLS-EXTRACT-WARN"
+  chmod 755 /tmp/ii/bin/* /tmp/ii/sbin/* 2>/dev/null
   echo "TOOLS-EXTRACTED"
 fi
 echo "TOOLS: $(ls /tmp/ii/bin 2>/dev/null | head -8 | tr '\n' ' ')"
