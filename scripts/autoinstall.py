@@ -233,8 +233,18 @@ export PATH
 LD_LIBRARY_PATH=/tmp/ii/lib:/tmp/ii/lib64:/tmp/ii/usr/lib:$LD_LIBRARY_PATH
 export LD_LIBRARY_PATH
 echo "INSTALL-SCRIPT-START"
-echo "TOOLS: $(ls /tmp/ii/bin 2>/dev/null | head -8 | tr '\n' ' ')"
 umount /hd 2>/dev/null
+
+# --- 0a. ekstrak install.img (tools: fdisk, pv, grub-install + libs) ---
+if [ ! -x /tmp/ii/sbin/grub-install ]; then
+  echo "EXTRACT-TOOLS-START"
+  mkdir -p /tmp/ii
+  zcat /mnt/install.img | ( cd /tmp/ii && /bin/busybox cpio -idu > /dev/null 2>&1 ) \
+    || zcat /src/install.img | ( cd /tmp/ii && /bin/busybox cpio -idu > /dev/null 2>&1 ) \
+    || echo "TOOLS-EXTRACT-WARN"
+  echo "TOOLS-EXTRACTED"
+fi
+echo "TOOLS: $(ls /tmp/ii/bin 2>/dev/null | head -8 | tr '\n' ' ')"
 
 # --- 0. cari direktori sumber (kernel/initrd/system) di media boot ---
 SRC_DIR=""
@@ -483,7 +493,7 @@ def mode_run(a):
         accel_arg[0], accel_arg[1],
         "-cpu", cpu_arg,
         "-smp", "4",
-        "-m", "2048",
+        "-m", "3072",
         "-kernel", str(kernel),
         "-initrd", str(initrd_run),
         "-append", append,
@@ -593,6 +603,8 @@ def mode_run(a):
     deadline = t0 + a.timeout * 60
     saw_ok = False
     saw_fail = ""
+    saw_script_start = False
+    sent_fallback = False
     fail_markers = ("INSTALL-FAIL",)
     next_dump = time.time() + 90
     idle_since = time.time()
@@ -611,8 +623,11 @@ def mode_run(a):
             if "INSTALL-OK" in buf and not saw_ok:
                 saw_ok = True
                 log(">>> INSTALL-OK terlihat - nunggu VM reboot keluar sendiri...")
+            if "INSTALL-SCRIPT-START" in buf and not saw_script_start:
+                saw_script_start = True
+                log(">>> script installer mulai jalan di guest...")
             if ("not found" in buf and "sh /i.sh" in buf
-                    and not sent_fallback):
+                    and not sent_fallback and not saw_script_start):
                 # /i.sh gak ada (injeksi gagal?) -> kirim via base64
                 sent_fallback = True
                 log(">>> /i.sh gak ketemu — fallback kirim script via base64...")
