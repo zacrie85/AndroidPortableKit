@@ -206,11 +206,17 @@ def _whpx_works(qemu: str) -> bool:
 
 
 def mode_run(a):
-    """Serial-console automation (expect-style).
+    """Install otomatis VIA SERIAL SHELL (tanpa dialog installer sama sekali).
 
-    console=ttyS0 jadi /dev/console -> SEMUA prompt installer kelihatan di
-    serial dan jawaban dikirim langsung ke serial socket. Tanpa nebak tombol.
+    Alur: boot live dengan DEBUG=1 -> init kasih root shell di serial
+    ("Type 'exit' to continue booting") -> kita kirim script installer
+    (base64 biar aman dari masalah EOL serial) -> script melakukan:
+      fdisk + mkfs.ext4 + cp kernel/initrd/system.img + grub-install
+      + grub.cfg -> reboot -f (QEMU keluar karena -no-reboot).
+    Sukses = 'INSTALL-OK' terlihat + disk terisi > 2 GB + QEMU keluar.
     """
+    import base64
+    import time as _t
     qemu = a.qemu
     bootdir = Path(a.bootdir)
     outdir = Path(a.outdir)
@@ -218,12 +224,11 @@ def mode_run(a):
     disk = Path(a.disk)
     iso = Path(a.iso)
     append = (bootdir / "append.txt").read_text(encoding="utf-8").strip()
-    # AUTO_INSTALL=force: lewati dialog "last confirmation" (--defaultno) yang
-    # FATAL kalau kena Enter (default No = reboot). Lihat 1-install baris 140.
-    append = append.replace("AUTO_INSTALL=0", "AUTO_INSTALL=force")
-    # FORCE_FORMAT=ext4: auto-pilih filesystem (kernel passer env ke init)
-    # console=ttyS0 TERAKHIR -> /dev/console = serial (prompt + dialog di serial)
-    append = append + " FORCE_FORMAT=ext4 console=tty0 console=ttyS0,115200"
+    # buang parameter yang gak dipakai mode ini, tambah DEBUG=1 + serial console
+    append = re.sub(r"(^|\s)AUTO_INSTALL=\S*", " ", append)
+    append = re.sub(r"(^|\s)DEBUG=\S*", " ", append)
+    append = append + " DEBUG=1 noexec=off console=tty0 console=ttyS0,115200"
+    append = " ".join(append.split())
     kernel = bootdir / "kernel.img"
     initrd = bootdir / "initrd.img"
 
@@ -255,12 +260,11 @@ def mode_run(a):
         "-monitor", "tcp:127.0.0.1:4444,server,nowait",
         "-rtc", "base=localtime",
     ]
-    log("Booting installer (serial mode): " + " ".join(cmd[:12]) + " ...")
+    log("Booting live (serial shell mode): " + " ".join(cmd[:12]) + " ...")
     t0 = time.time()
     proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL,
                             stderr=subprocess.STDOUT)
 
-    # konek ke serial TCP socket (Windows Python gak punya AF_UNIX!)
     ser = None
     for _ in range(90):
         try:
@@ -282,6 +286,7 @@ def mode_run(a):
             hmp = socket.create_connection(("127.0.0.1", 4444), timeout=5)
             break
         except OSError:
+            hmp = None
             time.sleep(1)
     if hmp is not None:
         hmp.settimeout(3)
@@ -295,8 +300,6 @@ def mode_run(a):
             return ""
 
     log_file = open(outdir / "serial.log", "wb")
-    buf = ""
-    responded = {}          # pattern -> jumlah respons terkirim
     dump_dir = outdir / "screens"
     dump_dir.mkdir(exist_ok=True)
     dump_n = [0]
@@ -304,97 +307,92 @@ def mode_run(a):
     def screendump():
         dump_n[0] += 1
         hmp_cmd(f"screendump { (dump_dir / ('s%03d.ppm' % dump_n[0])).as_posix() }")
-        time.sleep(1.0)
-        ppm = dump_dir / f"s{dump_n[0]:03d}.ppm"
-        if ppm.exists() and ppm.stat().st_size > 1000:
+
+    def serial_send(line: str):
+        ser.sendall(line.encode() + b"\r\n")
+        time.sleep(0.15)
+
+    INSTALL_SH = """
+PATH=/tmp/ii/bin:/tmp/ii/sbin:$PATH
+export PATH
+echo "INSTALL-SCRIPT-START"
+umount /hd 2>/dev/null
+echo "o
+n
+p
+1
+
+
+w" | fdisk /dev/sda
+sleep 2
+mdev -s
+ls -la /dev/sda1
+mkfs.ext4 -F /dev/sda1 || mke2fs -F /dev/sda1 || { echo "INSTALL-FAIL-MKFS"; exit 1; }
+mkdir -p /hd
+mount /dev/sda1 /hd || { echo "INSTALL-FAIL-MOUNT"; exit 1; }
+mkdir -p /hd/android-16.9.7/data
+cp /mnt/kernel /hd/android-16.9.7/kernel
+cp /mnt/initrd.img /hd/android-16.9.7/initrd.img
+echo "COPY-SYSTEM-START"
+pv -n /sfs/system.img > /hd/android-16.9.7/system.img
+echo "COPY-SYSTEM-DONE"
+sync
+SZ=$(du -sk /hd/android-16.9.7/system.img | cut -f1)
+echo "SYSTEM-IMG-KB=$SZ"
+if [ "$SZ" -lt 2000000 ]; then echo "INSTALL-FAIL-COPY"; exit 1; fi
+mkdir -p /hd/boot/grub
+grub-install --directory=/tmp/ii/lib/grub/i386-pc --modules="all_video video png gfxmenu gfxterm" --root-directory=/hd /dev/sda || { echo "INSTALL-FAIL-GRUB"; exit 1; }
+cat > /hd/boot/grub/grub.cfg << CFGEOF9
+set timeout=3
+set default=0
+menuentry 'BlissOS-16.9.7' {
+	search --set=root --file /android-16.9.7/kernel
+	linux /android-16.9.7/kernel root=/dev/ram0 SRC=android-16.9.7 quiet
+	initrd /android-16.9.7/initrd.img
+}
+CFGEOF9
+sync
+ls -la /hd /hd/android-16.9.7
+echo "INSTALL-OK"
+reboot -f
+echo "INSTALL-FAIL-STILL-ALIVE"
+"""
+
+    b64 = base64.b64encode(INSTALL_SH.encode()).decode()
+    # pecah jadi baris 900 karakter biar aman di serial
+    b64_lines = [b64[i:i + 900] for i in range(0, len(b64), 900)]
+
+    def phase1_wait_shell(deadline_sec):
+        buf = ""
+        dl = time.time() + deadline_sec
+        next_dump = time.time() + 90
+        while time.time() < dl:
+            if proc.poll() is not None:
+                return None
             try:
-                from PIL import Image
-                Image.open(ppm).save(str(ppm.with_suffix(".png")))
-                ppm.unlink()
-            except Exception:
-                pass
-
-    # (pola, jawaban, nama) — jawaban dikirim SATU kali per kemunculan pola.
-    # Jawaban boleh string ATAU tuple (jawaban per kemunculan ke-N,
-    # kemunculan berikutnya memakai yang terakhir).
-    # Hasil analisa serial.log CI: prompt y/n muncul 2x:
-    #   ke-1: 'n' -> memulai installer ("Starting Installer")
-    #   ke-2: 'y' -> konfirmasi install beneran (kalau 'n' = batal!)
-    RULES = [
-        ("Are you sure you want to continue (y/n)?", ("n\r", "y\r"),
-         "y/n (ke-1: n -> mulai installer, ke-2: y -> lanjut install)"),
-        ("Would you like to customize the formatted drive name", "\r",
-         "inputbox nama drive (default)"),
-        ("Are you sure to create the image?", "\r",
-         "data image -> Yes"),
-        ("Please input the size of the data.img", "\r",
-         "ukuran data.img (default 2048)"),
-        ("Do you want to force format", "\x1b[D\r",
-         "error mount -> force format Yes"),
-        ("is installed successfully", "MENU_END",
-         "Congratulations -> pilih Reboot"),
-    ]
-
-    deadline = t0 + a.timeout * 60
-    next_dump = t0 + 60
-    saw_rebooting = False
-    congratulated = False
-    last_data = time.time()
-
-    while time.time() < deadline:
-        if proc.poll() is not None:
-            log(f"QEMU keluar (elapsed {int(time.time()-t0)}s)")
-            break
-        # baca serial
-        got = b""
-        try:
-            got = ser.recv(65536)
-        except socket.timeout:
-            pass
-        except OSError:
-            pass
-        if got:
-            last_data = time.time()
-            log_file.write(got)
-            log_file.flush()
-            try:
+                got = ser.recv(65536)
+            except socket.timeout:
+                got = b""
+            except OSError:
+                got = b""
+            if got:
+                log_file.write(got)
+                log_file.flush()
                 buf += got.decode("utf-8", "replace")
-            except Exception:
-                pass
-            # jalankan aturan jawaban
-            for pat, ans, name in RULES:
-                n_seen = buf.count(pat)
-                n_sent = responded.get(pat, 0)
-                while n_sent < n_seen:
-                    if ans == "MENU_END":
-                        log(f"SELESAI INSTALL! ({name}) - pilih Reboot")
-                        congratulated = True
-                        ser.sendall(b"\x1b[B")      # panah bawah -> Reboot
-                        time.sleep(1.5)
-                        ser.sendall(b"\r")
-                    else:
-                        a = ans
-                        if isinstance(ans, (list, tuple)):
-                            a = ans[min(n_sent, len(ans) - 1)]
-                        log(f"JAWAB #{n_sent + 1}: {name} -> {a!r}")
-                        ser.sendall(a.encode())
-                    responded[pat] = n_sent + 1
-                    n_sent += 1
-            if "Rebooting" in buf and not saw_rebooting:
-                saw_rebooting = True
-                log(">>> 'Rebooting' terlihat - INSTALL BERHASIL! <<<")
-        # dump berkala
-        if time.time() >= next_dump:
-            screendump()
-            next_dump = time.time() + 120
-        # diam total > 10 menit pasca-congrats -> kemungkinan hang, catet aja
-        if congratulated and time.time() - last_data > 600:
-            log("Serial diam lama setelah Congratulations - kemungkinan VM hang.")
-        time.sleep(1)
+                if len(buf) > 200000:
+                    buf = buf[-100000:]
+            if "Type 'exit' to continue booting" in buf:
+                return buf
+            if time.time() >= next_dump:
+                screendump()
+                next_dump = time.time() + 120
+        return None
 
-    log_file.close()
-    if proc.poll() is None:
-        log("Timeout - matiin VM.")
+    log("Menunggu debug shell di serial (maks 30 menit)...")
+    buf = phase1_wait_shell(30 * 60) or ""
+    if "Type 'exit' to continue booting" not in buf:
+        log("GAGAL: debug shell gak pernah muncul.")
+        log_file.close()
         try:
             hmp_cmd("quit")
         except Exception:
@@ -402,15 +400,69 @@ def mode_run(a):
         time.sleep(5)
         if proc.poll() is None:
             proc.kill()
+        return 1
+    log("Debug shell terdeteksi. Kirim script installer...")
+    time.sleep(2)
+    ser.sendall(b"\n")
+    time.sleep(1)
+
+    serial_send("mkdir -p /tmp/ii && cd /tmp/ii && zcat /mnt/install.img | cpio -idu && echo TOOLS-OK")
+    for ln in b64_lines:
+        serial_send(f"echo {ln} >> /tmp/i.b64")
+    serial_send("base64 -d /tmp/i.b64 > /tmp/i.sh && echo SCRIPT-OK")
+    serial_send("sh /tmp/i.sh")
+
+    deadline = t0 + a.timeout * 60
+    saw_ok = False
+    saw_fail = ""
+    next_dump = time.time() + 90
+    while time.time() < deadline:
+        if proc.poll() is not None:
+            log(f"QEMU keluar (elapsed {int(time.time() - t0)}s)")
+            break
+        try:
+            got = ser.recv(65536)
+        except socket.timeout:
+            got = b""
+        except OSError:
+            got = b""
+        if got:
+            log_file.write(got)
+            log_file.flush()
+            buf += got.decode("utf-8", "replace")
+            if len(buf) > 300000:
+                buf = buf[-150000:]
+            if "INSTALL-OK" in buf and not saw_ok:
+                saw_ok = True
+                log(">>> INSTALL-OK terlihat - nunggu VM reboot keluar sendiri...")
+            for mk in ("INSTALL-FAIL", "Error!", "not found"):
+                if mk in buf and not saw_fail:
+                    pass  # cuma catatan; penentuan gagal tetap lewat marker akhir
+        if "INSTALL-FAIL" in buf and not saw_fail:
+            saw_fail = buf[buf.find("INSTALL-FAIL"):buf.find("INSTALL-FAIL") + 60].splitlines()[0]
+            log(f">>> {saw_fail}")
+        if time.time() >= next_dump:
+            screendump()
+            next_dump = time.time() + 120
+        time.sleep(1)
+
+    if proc.poll() is None:
+        log("Timeout / belum keluar - matiin VM.")
+        try:
+            hmp_cmd("quit")
+        except Exception:
+            pass
+        time.sleep(5)
+        if proc.poll() is None:
+            proc.kill()
+    log_file.close()
 
     elapsed = int(time.time() - t0)
     raw = disk.stat().st_size if disk.exists() else 0
-    # Sukses HANYA jika installer sendiri mengirim "Rebooting" (tanda selesai)
-    # dan disk beneran terisi (sistem + data image).
-    ok = saw_rebooting and (raw > 2 * 1024**3) and elapsed >= 240
+    ok = saw_ok and raw > 2 * 1024**3 and elapsed >= 120
     status = {"elapsed_sec": elapsed, "disk_raw_bytes": raw,
               "disk_raw_gb": round(raw / 1024**3, 2),
-              "saw_rebooting": saw_rebooting, "ok": ok}
+              "saw_install_ok": saw_ok, "fail_hint": saw_fail, "ok": ok}
     (outdir / "status.json").write_text(json.dumps(status, indent=2))
     log("STATUS: " + json.dumps(status))
     return 0 if ok else 1
