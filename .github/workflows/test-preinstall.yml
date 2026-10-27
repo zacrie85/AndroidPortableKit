@@ -1,0 +1,63 @@
+name: Test Autoinstall (dispatch only, gak utak-atik Release)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  preinstall-test:
+    runs-on: windows-latest
+    timeout-minutes: 180
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Pasang Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Pasang QEMU portable
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          curl.exe -L --retry 5 -o "$env:RUNNER_TEMP\qemu-setup.exe" https://qemu.weilnetz.de/w64/qemu-w64-setup-20260811.exe
+          Start-Process "$env:RUNNER_TEMP\qemu-setup.exe" -ArgumentList "/S","/D=C:\qemu_portable" -Wait
+          if (-not (Test-Path "C:\qemu_portable\qemu-system-x86_64.exe")) { throw "QEMU gak terpasang" }
+          Write-Host "QEMU OK"
+
+      - name: Download ISO BlissOS 16 GApps
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          New-Item -ItemType Directory -Force -Path "C:\aw" | Out-Null
+          curl.exe -L --retry 5 -o "C:\aw\bliss.iso" "https://downloads.sourceforge.net/project/blissos-x86/Official/BlissOS16/Gapps/Generic/Bliss-v16.9.7-x86_64-OFFICIAL-gapps-20241011.iso"
+          if ((Get-Item "C:\aw\bliss.iso").Length -lt 1GB) { throw "ISO kurang lengkap" }
+          Write-Host "ISO OK"
+
+      - name: Parse parameter boot Auto Install dari ISO
+        run: python scripts/autoinstall.py parse-grub --iso "C:\aw\bliss.iso" --sevenzip "C:\Program Files\7-Zip\7z.exe" --outdir "C:\aw\boot"
+
+      - name: Bikin disk virtual 16 GB (tes)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          & C:\qemu_portable\qemu-img.exe create -f qcow2 "C:\aw\base-system.qcow2" 16G
+          if (-not (Test-Path "C:\aw\base-system.qcow2")) { throw "gagal bikin disk" }
+          Write-Host "disk OK"
+
+      - name: INSTALL OTOMATIS Android ke disk (tes headless)
+        run: python scripts/autoinstall.py run --qemu "C:\qemu_portable\qemu-system-x86_64.exe" --qemu-img "C:\qemu_portable\qemu-img.exe" --disk "C:\aw\base-system.qcow2" --iso "C:\aw\bliss.iso" --bootdir "C:\aw\boot" --outdir "C:\aw\out" --timeout 110
+
+      - name: Simpan log serial + status + screenshot
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: autoinstall-debug-test
+          path: |
+            C:\aw\out\serial.log
+            C:\aw\out\status.json
+            C:\aw\out\screens\
+          if-no-files-found: ignore

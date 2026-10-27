@@ -2,24 +2,37 @@
 # -*- coding: utf-8 -*-
 """
 autoinstall.py — Pasang Android-x86/BlissOS ke disk virtual SECARA OTOMATIS
-(headless, di GitHub Actions windows runner).
+(headless, di GitHub Actions windows runner ATAU PC user via setup.ps1).
 
 Dua mode:
-  parse-grub : ekstrak kernel/initrd/grub.cfg dari ISO, cari entry
-               "Auto Install to specified harddisk" dan ambil param boot-nya.
-  run        : boot installer via -kernel/-initrd (skip menu GRUB), lalu
-               kirim tombol Enter berkala via monitor HMP sampai installer
-               selesai (qemu keluar karena -no-reboot).
+  parse-grub : ekstrak kernel/initrd dari ISO, cari entry "Auto Install"
+               dan ambil parameter boot-nya.
+  run        : boot live system dengan DEBUG=1 (root shell di serial), lalu
+               jalankan script installer. Script dikirim lewat INITRD
+               INJECTION (cpio tambahan ditempel ke initrd.img, muncul
+               sebagai /i.sh di guest) — serial cuma nerima perintah pendek
+               `sh /i.sh`. Fallback: base64 via serial (baris pendek).
 
-Sukses = qemu keluar dengan sendirinya (install selesai -> reboot -> -no-reboot).
-Semua screendump disimpan ke --outdir buat diagnosis kalau gagal.
+v1.2.3 — perbaikan dari analisa serial.log CI (v1.2.0/1/2 gagal):
+  * fdisk bawaan install.img butuh libfdisk.so.1 (gak ada di initramfs)
+    -> partisi sekarang 3 lapis: tools fdisk (LD_LIBRARY_PATH dibetulkan)
+       -> busybox fdisk -> MBR jadi (dibuat host, dd + blockdev --rereadpt).
+  * sumber file (kernel/initrd/system) dideteksi dinamis dari /mnt,
+    system.sfs di loop-mount sendiri kalau init belum mount /sfs.
+  * loop tunggu berhenti SEGERA kalau ketemu INSTALL-FAIL (dulu nunggu
+    timeout penuh 150 menit padahal install udah mati di menit ke-4).
+  * qcow2 virtual size dibaca dari qemu-img buat bikin MBR yang pas.
+
+Sukses = INSTALL-OK + disk terisi > 2 GB + QEMU keluar sendiri (-no-reboot).
 """
 
 import argparse
+import base64
 import json
 import os
 import re
 import socket
+import struct
 import subprocess
 import sys
 import time
@@ -149,6 +162,201 @@ def mode_parse_grub(a):
 
 
 # ---------------------------------------------------------------------------
+# INITRD INJECTION (cpio newc tambahan, pure python)
+# ---------------------------------------------------------------------------
+
+def _cpio_newc_entry(name: str, data: bytes, mode: int = 0o100755) -> bytes:
+    """Satu entry cpio 'newc' (SVR4)."""
+    fields = [1, mode, 0, 0, 1, 0, len(data), 0, 0, 0, 0, len(name) + 1, 0]
+    hdr = b"070701" + b"".join(b"%08X" % f for f in fields)
+    out = hdr + name.encode() + b"\x00"
+    out += b"\x00" * ((4 - len(out) % 4) % 4)
+    out += data
+    out += b"\x00" * ((4 - len(data) % 4) % 4)
+    return out
+
+
+def _build_initrd_with_files(initrd_path: Path, files: dict) -> Path:
+    """Tempel cpio tambahan (berisi files) ke ujung initrd.img.
+    Kernel Linux nerima initramfs berupa beberapa arsip cpio sambung-
+    menyambung (masing2 boleh punya kompresi sendiri). Padding 4-byte
+    relatif ke awal buffer dijaga biar parser kernel gak nyasar."""
+    initrd_bytes = initrd_path.read_bytes()
+    pad = b"\x00" * ((4 - len(initrd_bytes) % 4) % 4)
+    blob = pad
+    for name, data in files.items():
+        blob += _cpio_newc_entry(name, data)
+    blob += _cpio_newc_entry("TRAILER!!!", b"", mode=0o0)
+    blob += b"\x00" * ((512 - len(blob) % 512) % 512)
+    out = initrd_path.with_name(initrd_path.stem + "-run.img")
+    out.write_bytes(initrd_bytes + blob)
+    log(f"initrd injeksi: {initrd_path.name} ({len(initrd_bytes)//1e6:.1f} MB) "
+        f"+ cpio [{', '.join(files)}] -> {out.name} ({len(blob)//1e3:.0f} KB tambahan)")
+    return out
+
+
+def _build_mbr_bin(disk: Path, qemu_img: str) -> bytes:
+    """MBR 512 byte: satu partisi primary tipe 83 mulai LBA 2048.
+    Ukuran partisi dihitung dari virtual-size qcow2 (pas, gak 'beyond EOD')."""
+    total_sect = None
+    try:
+        r = subprocess.run([qemu_img, "info", "--output=json", str(disk)],
+                           capture_output=True, text=True, timeout=60)
+        info = json.loads(r.stdout or "{}")
+        vsize = int(info.get("virtual-size") or 0)
+        if vsize > 0:
+            total_sect = vsize // 512
+    except Exception as e:
+        log(f"qemu-img info gagal ({e}) — pakai default 40G")
+    if not total_sect or total_sect <= 2048:
+        total_sect = 40 * 1024 * 1024 * 2  # 40 GB fallback
+    part_sect = total_sect - 2048
+    mbr = bytearray(512)
+    # entry 1 @446: boot flag 0x80, CHS start dummy, tipe 0x83, CHS end dummy
+    mbr[446:462] = struct.pack("<BBBBBBBBII",
+                               0x80, 0x20, 0x21, 0x00,
+                               0x83, 0xFE, 0xFF, 0x0A,
+                               2048, part_sect)
+    mbr[510:512] = b"\x55\xAA"
+    log(f"MBR dibuat: partisi {part_sect} sektor "
+        f"({part_sect*512/1024**3:.1f} GB) dari disk {total_sect} sektor")
+    return bytes(mbr)
+
+
+# ---------------------------------------------------------------------------
+# Script installer (dijalankan DI GUEST via `sh /i.sh`)
+# ---------------------------------------------------------------------------
+
+INSTALL_SH = r"""
+PATH=/tmp/ii/bin:/tmp/ii/sbin:$PATH
+export PATH
+LD_LIBRARY_PATH=/tmp/ii/lib:/tmp/ii/lib64:/tmp/ii/usr/lib:$LD_LIBRARY_PATH
+export LD_LIBRARY_PATH
+echo "INSTALL-SCRIPT-START"
+echo "TOOLS: $(ls /tmp/ii/bin 2>/dev/null | head -8 | tr '\n' ' ')"
+umount /hd 2>/dev/null
+
+# --- 0. cari direktori sumber (kernel/initrd/system) di media boot ---
+SRC_DIR=""
+for d in /mnt /src /mnt/iso /mnt/android-16.9.7; do
+  if [ -f "$d/system.efs" ] || [ -f "$d/system.sfs" ] || [ -f "$d/system.img" ]; then
+    SRC_DIR="$d"; break
+  fi
+done
+echo "SRC_DIR=$SRC_DIR"
+if [ -z "$SRC_DIR" ]; then
+  echo "INSTALL-FAIL-NOSRC"
+  ls -la /mnt /src 2>/dev/null
+  exit 1
+fi
+ls -la "$SRC_DIR" > /tmp/srcdir.txt 2>&1
+head -20 /tmp/srcdir.txt
+
+# --- 1. partisi (3 lapis) ---
+dd if=/dev/zero of=/dev/sda bs=1M count=16 2>/dev/null
+sync
+printf 'o\nn\np\n1\n\n\nw\n' | fdisk /dev/sda > /tmp/fdisk.log 2>&1
+sync; sleep 1; mdev -s 2>/dev/null; sleep 1
+if [ ! -b /dev/sda1 ]; then
+  echo "PART-FALLBACK-1: busybox fdisk"
+  printf 'o\nn\np\n1\n\n\nw\n' | /bin/busybox fdisk /dev/sda > /tmp/fdisk2.log 2>&1
+  sync; sleep 1; mdev -s 2>/dev/null; sleep 1
+fi
+if [ ! -b /dev/sda1 ]; then
+  echo "PART-FALLBACK-2: dd MBR jadi"
+  dd if=/mbr.bin of=/dev/sda bs=512 count=1 conv=notrunc > /tmp/dd.log 2>&1
+  /bin/busybox blockdev --rereadpt /dev/sda >> /tmp/dd.log 2>&1
+  sync; sleep 1; mdev -s 2>/dev/null; sleep 1
+fi
+if [ ! -b /dev/sda1 ]; then
+  mknod /dev/sda1 b 8 1 2>/dev/null
+fi
+if [ ! -b /dev/sda1 ]; then
+  echo "INSTALL-FAIL-NOPART"
+  ls -la /dev/sda*
+  cat /tmp/fdisk.log /tmp/fdisk2.log /tmp/dd.log 2>/dev/null
+  exit 1
+fi
+echo "PART-OK"
+ls -la /dev/sda1
+
+# --- 2. format (mkfs.ext4 gak ada di initramfs -> busybox mke2fs) ---
+if ! /tmp/ii/sbin/mkfs.ext4 -F /dev/sda1 > /tmp/mkfs.log 2>&1; then
+  if ! /bin/busybox mke2fs -F -t ext4 /dev/sda1 > /tmp/mkfs.log 2>&1; then
+    if ! /bin/busybox mke2fs -F /dev/sda1 > /tmp/mkfs.log 2>&1; then
+      tail -5 /tmp/mkfs.log
+      echo "INSTALL-FAIL-MKFS"
+      exit 1
+    fi
+  fi
+fi
+tail -3 /tmp/mkfs.log
+echo "MKFS-OK"
+
+# --- 3. mount + salin file sistem ---
+mkdir -p /hd
+mount -t ext4 /dev/sda1 /hd 2>/dev/null || mount /dev/sda1 /hd || { echo "INSTALL-FAIL-MOUNT"; exit 1; }
+TGT=/android-16.9.7
+mkdir -p /hd$TGT/data
+cp "$SRC_DIR/kernel" /hd$TGT/kernel || { echo "INSTALL-FAIL-COPYKERNEL"; exit 1; }
+cp "$SRC_DIR/initrd.img" /hd$TGT/initrd.img || { echo "INSTALL-FAIL-COPYINITRD"; exit 1; }
+echo "KERNEL-INITRD-COPIED"
+
+SYS_SRC=""
+SYS_NAME=""
+if [ -f /sfs/system.img ]; then
+  SYS_SRC=/sfs/system.img; SYS_NAME=system.img
+elif [ -f "$SRC_DIR/system.efs" ]; then
+  SYS_SRC="$SRC_DIR/system.efs"; SYS_NAME=system.efs
+elif [ -f "$SRC_DIR/system.sfs" ]; then
+  mkdir -p /sfs2
+  if mount -o loop "$SRC_DIR/system.sfs" /sfs2 2>/dev/null && [ -f /sfs2/system.img ]; then
+    SYS_SRC=/sfs2/system.img; SYS_NAME=system.img
+  else
+    SYS_SRC="$SRC_DIR/system.sfs"; SYS_NAME=system.sfs
+  fi
+elif [ -f "$SRC_DIR/system.img" ]; then
+  SYS_SRC="$SRC_DIR/system.img"; SYS_NAME=system.img
+fi
+if [ -z "$SYS_SRC" ] || [ ! -f "$SYS_SRC" ]; then
+  echo "INSTALL-FAIL-NOSYS"
+  ls -la /sfs /sfs2 "$SRC_DIR" 2>/dev/null
+  exit 1
+fi
+echo "COPY-SYSTEM-START (dari $SYS_SRC)"
+if command -v pv > /dev/null 2>&1; then
+  pv -n "$SYS_SRC" > /hd$TGT/$SYS_NAME
+else
+  cat "$SYS_SRC" > /hd$TGT/$SYS_NAME
+fi
+echo "COPY-SYSTEM-DONE"
+sync
+SZ=$(du -sk /hd$TGT/$SYS_NAME | cut -f1)
+echo "SYSTEM-IMG-KB=$SZ ($SYS_NAME)"
+if [ "$SZ" -lt 1500000 ]; then echo "INSTALL-FAIL-COPY"; exit 1; fi
+
+# --- 4. GRUB ---
+mkdir -p /hd/boot/grub
+grub-install --directory=/tmp/ii/lib/grub/i386-pc --modules="all_video video png gfxmenu gfxterm" --root-directory=/hd /dev/sda > /tmp/grub.log 2>&1 || { tail -8 /tmp/grub.log; echo "INSTALL-FAIL-GRUB"; exit 1; }
+echo "GRUB-OK"
+cat > /hd/boot/grub/grub.cfg << CFGEOF9
+set timeout=3
+set default=0
+menuentry 'BlissOS-16.9.7' {
+        search --set=root --file $TGT/kernel
+        linux $TGT/kernel root=/dev/ram0 SRC=android-16.9.7 quiet
+        initrd $TGT/initrd.img
+}
+CFGEOF9
+sync
+ls -la /hd /hd$TGT
+echo "INSTALL-OK"
+reboot -f
+echo "INSTALL-FAIL-STILL-ALIVE"
+"""
+
+
+# ---------------------------------------------------------------------------
 # MODE run
 # ---------------------------------------------------------------------------
 
@@ -205,18 +413,41 @@ def _whpx_works(qemu: str) -> bool:
         return False
 
 
+def _serial_recv(ser) -> bytes:
+    try:
+        return ser.recv(65536)
+    except socket.timeout:
+        return b""
+    except OSError:
+        return b""
+
+
+def _send_b64_script(ser, script_text: str):
+    """Fallback: kirim script sebagai base64 lewat serial (baris pendek,
+    jeda cukup — baris 900 char @0.15s kebukti aman di v1.2.2)."""
+    b64 = base64.b64encode(script_text.encode()).decode()
+    lines = [b64[i:i + 700] for i in range(0, len(b64), 700)]
+    ser.sendall(b"\n")
+    time.sleep(1)
+    ser.sendall(b"mkdir -p /tmp/ii && cd /tmp/ii && "
+                b"zcat /mnt/install.img | cpio -idu && echo TOOLS-OK\r\n")
+    time.sleep(0.3)
+    for ln in lines:
+        ser.sendall(f"echo {ln} >> /tmp/i.b64\r\n".encode())
+        time.sleep(0.3)
+    ser.sendall(b"base64 -d /tmp/i.b64 > /tmp/i.sh && echo SCRIPT-OK\r\n")
+    time.sleep(0.5)
+    ser.sendall(b"sh /tmp/i.sh\r\n")
+
+
 def mode_run(a):
-    """Install otomatis VIA SERIAL SHELL (tanpa dialog installer sama sekali).
+    """Install otomatis VIA SERIAL SHELL, script dikirim via initrd injection.
 
     Alur: boot live dengan DEBUG=1 -> init kasih root shell di serial
-    ("Type 'exit' to continue booting") -> kita kirim script installer
-    (base64 biar aman dari masalah EOL serial) -> script melakukan:
-      fdisk + mkfs.ext4 + cp kernel/initrd/system.img + grub-install
-      + grub.cfg -> reboot -f (QEMU keluar karena -no-reboot).
-    Sukses = 'INSTALL-OK' terlihat + disk terisi > 2 GB + QEMU keluar.
+    ("Type 'exit' to continue booting") -> kita kirim `sh /i.sh`
+    (i.sh + mbr.bin nempel di initramfs) -> script partisi/format/salin/
+    grub -> reboot -f (QEMU keluar karena -no-reboot).
     """
-    import base64
-    import time as _t
     qemu = a.qemu
     bootdir = Path(a.bootdir)
     outdir = Path(a.outdir)
@@ -231,6 +462,12 @@ def mode_run(a):
     append = " ".join(append.split())
     kernel = bootdir / "kernel.img"
     initrd = bootdir / "initrd.img"
+
+    # --- siapkan initrd ber-injeksi (i.sh + mbr.bin) ---
+    mbr_bin = _build_mbr_bin(disk, a.qemu_img)
+    inject = {"i.sh": INSTALL_SH.encode(), "mbr.bin": mbr_bin}
+    initrd_run = _build_initrd_with_files(initrd, inject)
+    log(f"initrd dipakai: {initrd_run.name}")
 
     # pilih akselerasi: whpx kalau beneran aktif (kencang), kalau gak -> tcg
     accel_arg = ["-accel", "tcg,thread=multi"]
@@ -248,7 +485,7 @@ def mode_run(a):
         "-smp", "4",
         "-m", "2048",
         "-kernel", str(kernel),
-        "-initrd", str(initrd),
+        "-initrd", str(initrd_run),
         "-append", append,
         "-hda", str(disk),
         "-cdrom", str(iso),
@@ -260,7 +497,8 @@ def mode_run(a):
         "-monitor", "tcp:127.0.0.1:4444,server,nowait",
         "-rtc", "base=localtime",
     ]
-    log("Booting live (serial shell mode): " + " ".join(cmd[:12]) + " ...")
+    log("Booting live (serial shell + initrd injection): "
+        + " ".join(cmd[:12]) + " ...")
     t0 = time.time()
     proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL,
                             stderr=subprocess.STDOUT)
@@ -308,60 +546,7 @@ def mode_run(a):
         dump_n[0] += 1
         hmp_cmd(f"screendump { (dump_dir / ('s%03d.ppm' % dump_n[0])).as_posix() }")
 
-    def serial_send(line: str):
-        ser.sendall(line.encode() + b"\r\n")
-        time.sleep(0.15)
-
-    INSTALL_SH = """
-PATH=/tmp/ii/bin:/tmp/ii/sbin:$PATH
-export PATH
-echo "INSTALL-SCRIPT-START"
-umount /hd 2>/dev/null
-echo "o
-n
-p
-1
-
-
-w" | fdisk /dev/sda
-sleep 2
-mdev -s
-ls -la /dev/sda1
-mkfs.ext4 -F /dev/sda1 || mke2fs -F /dev/sda1 || { echo "INSTALL-FAIL-MKFS"; exit 1; }
-mkdir -p /hd
-mount /dev/sda1 /hd || { echo "INSTALL-FAIL-MOUNT"; exit 1; }
-mkdir -p /hd/android-16.9.7/data
-cp /mnt/kernel /hd/android-16.9.7/kernel
-cp /mnt/initrd.img /hd/android-16.9.7/initrd.img
-echo "COPY-SYSTEM-START"
-pv -n /sfs/system.img > /hd/android-16.9.7/system.img
-echo "COPY-SYSTEM-DONE"
-sync
-SZ=$(du -sk /hd/android-16.9.7/system.img | cut -f1)
-echo "SYSTEM-IMG-KB=$SZ"
-if [ "$SZ" -lt 2000000 ]; then echo "INSTALL-FAIL-COPY"; exit 1; fi
-mkdir -p /hd/boot/grub
-grub-install --directory=/tmp/ii/lib/grub/i386-pc --modules="all_video video png gfxmenu gfxterm" --root-directory=/hd /dev/sda || { echo "INSTALL-FAIL-GRUB"; exit 1; }
-cat > /hd/boot/grub/grub.cfg << CFGEOF9
-set timeout=3
-set default=0
-menuentry 'BlissOS-16.9.7' {
-	search --set=root --file /android-16.9.7/kernel
-	linux /android-16.9.7/kernel root=/dev/ram0 SRC=android-16.9.7 quiet
-	initrd /android-16.9.7/initrd.img
-}
-CFGEOF9
-sync
-ls -la /hd /hd/android-16.9.7
-echo "INSTALL-OK"
-reboot -f
-echo "INSTALL-FAIL-STILL-ALIVE"
-"""
-
-    b64 = base64.b64encode(INSTALL_SH.encode()).decode()
-    # pecah jadi baris 900 karakter biar aman di serial
-    b64_lines = [b64[i:i + 900] for i in range(0, len(b64), 900)]
-
+    # --- fase 1: nunggu debug shell ---
     def phase1_wait_shell(deadline_sec):
         buf = ""
         dl = time.time() + deadline_sec
@@ -369,20 +554,15 @@ echo "INSTALL-FAIL-STILL-ALIVE"
         while time.time() < dl:
             if proc.poll() is not None:
                 return None
-            try:
-                got = ser.recv(65536)
-            except socket.timeout:
-                got = b""
-            except OSError:
-                got = b""
+            got = _serial_recv(ser)
             if got:
                 log_file.write(got)
                 log_file.flush()
                 buf += got.decode("utf-8", "replace")
                 if len(buf) > 200000:
                     buf = buf[-100000:]
-            if "Type 'exit' to continue booting" in buf:
-                return buf
+                if "Type 'exit' to continue booting" in buf:
+                    return buf
             if time.time() >= next_dump:
                 screendump()
                 next_dump = time.time() + 120
@@ -401,32 +581,28 @@ echo "INSTALL-FAIL-STILL-ALIVE"
         if proc.poll() is None:
             proc.kill()
         return 1
-    log("Debug shell terdeteksi. Kirim script installer...")
+    log("Debug shell terdeteksi. Kirim perintah install...")
     time.sleep(2)
     ser.sendall(b"\n")
     time.sleep(1)
 
-    serial_send("mkdir -p /tmp/ii && cd /tmp/ii && zcat /mnt/install.img | cpio -idu && echo TOOLS-OK")
-    for ln in b64_lines:
-        serial_send(f"echo {ln} >> /tmp/i.b64")
-    serial_send("base64 -d /tmp/i.b64 > /tmp/i.sh && echo SCRIPT-OK")
-    serial_send("sh /tmp/i.sh")
+    # --- fase 2: eksekusi script (injeksi initrd; fallback b64) ---
+    ser.sendall(b"sh /i.sh\r\n")
+    sent_fallback = False
 
     deadline = t0 + a.timeout * 60
     saw_ok = False
     saw_fail = ""
+    fail_markers = ("INSTALL-FAIL",)
     next_dump = time.time() + 90
+    idle_since = time.time()
     while time.time() < deadline:
         if proc.poll() is not None:
             log(f"QEMU keluar (elapsed {int(time.time() - t0)}s)")
             break
-        try:
-            got = ser.recv(65536)
-        except socket.timeout:
-            got = b""
-        except OSError:
-            got = b""
+        got = _serial_recv(ser)
         if got:
+            idle_since = time.time()
             log_file.write(got)
             log_file.flush()
             buf += got.decode("utf-8", "replace")
@@ -435,19 +611,30 @@ echo "INSTALL-FAIL-STILL-ALIVE"
             if "INSTALL-OK" in buf and not saw_ok:
                 saw_ok = True
                 log(">>> INSTALL-OK terlihat - nunggu VM reboot keluar sendiri...")
-            for mk in ("INSTALL-FAIL", "Error!", "not found"):
-                if mk in buf and not saw_fail:
-                    pass  # cuma catatan; penentuan gagal tetap lewat marker akhir
-        if "INSTALL-FAIL" in buf and not saw_fail:
-            saw_fail = buf[buf.find("INSTALL-FAIL"):buf.find("INSTALL-FAIL") + 60].splitlines()[0]
-            log(f">>> {saw_fail}")
+            if ("not found" in buf and "sh /i.sh" in buf
+                    and not sent_fallback):
+                # /i.sh gak ada (injeksi gagal?) -> kirim via base64
+                sent_fallback = True
+                log(">>> /i.sh gak ketemu — fallback kirim script via base64...")
+                _send_b64_script(ser, INSTALL_SH)
+            for mk in fail_markers:
+                if mk in buf:
+                    line = buf[buf.find(mk):]
+                    saw_fail = line.splitlines()[0][:80]
+                    log(f">>> GAGAL TERDETEKSI: {saw_fail}")
+                    break
+            if saw_fail and "INSTALL-FAIL-STILL-ALIVE" not in saw_fail:
+                break   # berhenti SEGERA — jangan buang waktu nunggu timeout
+        else:
+            # idlenya lama + belum ada marker apa2 -> screendump buat diagnosis
+            pass
         if time.time() >= next_dump:
             screendump()
             next_dump = time.time() + 120
         time.sleep(1)
 
     if proc.poll() is None:
-        log("Timeout / belum keluar - matiin VM.")
+        log("Matiin VM (selesai / gagal / timeout).")
         try:
             hmp_cmd("quit")
         except Exception:

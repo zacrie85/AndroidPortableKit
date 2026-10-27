@@ -30,7 +30,7 @@ if IS_WINDOWS:
     import ctypes  # noqa: F401 (dipakai untuk deteksi RAM)
 
 APP_NAME = "Android Portable Kit"
-APP_VERSION = "1.2.2"
+APP_VERSION = "1.2.3"
 
 # Repo GitHub tempat cek update otomatis (owner/repo)
 UPDATE_REPO = "zacrie85/AndroidPortableKit"
